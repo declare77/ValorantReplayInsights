@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>VrfInsights.Data</RootNamespace>
+    <AssemblyName>VrfInsights.Data</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reads the Parquet tables that vrfkit (https://github.com/yakisoba0728/vrfkit)
+         writes. This project never touches a .vrf file or the payload cipher: it only
+         reads vrfkit's already-decoded output. -->
+    <PackageReference Include="Parquet.Net" Version="6.1.0" />
+  </ItemGroup>
+
+</Project>

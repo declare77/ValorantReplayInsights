@@ -1,0 +1,48 @@
+using Parquet.Serialization;
+
+namespace VrfInsights.Data;
+
+/// <summary>
+/// Loads a single Parquet file into a list of column-name-keyed row dictionaries, using
+/// Parquet.Net's schema-agnostic "untyped" deserializer. vrfkit's tables are ordinary
+/// dictionary-encoded/ZSTD-compressed Parquet with plain primitive columns (see
+/// vrfkit's docs/USAGE.md), so there is no need to hand-walk <c>DataField</c>s per table —
+/// one call reads every row group and every column.
+/// </summary>
+public sealed class ParquetTable
+{
+    public IReadOnlyList<IReadOnlyDictionary<string, object>> Rows { get; }
+
+    private ParquetTable(IReadOnlyList<IReadOnlyDictionary<string, object>> rows)
+    {
+        Rows = rows;
+    }
+
+    public static async Task<ParquetTable> LoadAsync(string filePath, CancellationToken ct = default)
+    {
+        await using FileStream fs = File.OpenRead(filePath);
+        Parquet.Serialization.DeserializationResult<Dictionary<string, object>> result =
+            await ParquetSerializer.DeserializeUntypedAsync(fs, cancellationToken: ct);
+
+        var rows = new List<IReadOnlyDictionary<string, object>>(result.Data.Count);
+        foreach (Dictionary<string, object> row in result.Data)
+        {
+            rows.Add(row);
+        }
+
+        return new ParquetTable(rows);
+    }
+
+    /// <summary>Returns null (rather than throwing) when the file doesn't exist — some vrfkit
+    /// tables are only written with <c>--checkpoints</c>, and callers should treat an absent
+    /// optional table as "not available" rather than a hard failure.</summary>
+    public static async Task<ParquetTable?> TryLoadAsync(string filePath, CancellationToken ct = default)
+    {
+        if (!File.Exists(filePath))
+        {
+            return null;
+        }
+
+        return await LoadAsync(filePath, ct);
+    }
+}
