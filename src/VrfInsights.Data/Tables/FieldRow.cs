@@ -34,7 +34,7 @@ public sealed record FieldRow(
 {
     /// <summary>The single non-null overlay value for this row, or null if the row is untyped
     /// (only <see cref="RawBits"/> is available).</summary>
-    public object? Value => (object?)ValueI64 ?? ValueF64 ?? ValueBool ?? ValueStr;
+    public object? Value => (object?)ValueI64 ?? (object?)ValueF64 ?? (object?)ValueBool ?? ValueStr;
 
     public static FieldRow FromRow(IReadOnlyDictionary<string, object> row) => new(
         RowConvert.ToLong(row, "time_ms") ?? 0,

@@ -62,7 +62,7 @@ public static class RowConvert
         return v switch
         {
             bool b => b,
-            _ => null
+            _ => (bool?)null
         };
     }
 

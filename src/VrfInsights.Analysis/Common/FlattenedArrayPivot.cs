@@ -88,7 +88,7 @@ public static class FlattenedArrayPivot
         {
             double d => d,
             long l => l,
-            _ => null
+            _ => (double?)null
         };
 
     public static long? GetLong(this ArrayElementSnapshot snapshot, string member) =>
@@ -96,7 +96,7 @@ public static class FlattenedArrayPivot
         {
             long l => l,
             double d => (long)d,
-            _ => null
+            _ => (long?)null
         };
 
     public static bool? GetBool(this ArrayElementSnapshot snapshot, string member) =>
