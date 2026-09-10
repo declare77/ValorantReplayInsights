@@ -126,7 +126,7 @@ cross-validated columns.
 
 ## Requirements
 
-- .NET 8 SDK
+- .NET 10 SDK (targets `net10.0`; drop the `<TargetFramework>` in each `.csproj` to `net8.0` if you're on an older SDK instead)
 - A vrfkit export directory (`vrfkit export <file.vrf> --out <dir>`) — see
   [vrfkit](https://github.com/yakisoba0728/vrfkit) for build instructions (Rust 1.86+)
 
