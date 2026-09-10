@@ -34,9 +34,18 @@ There are three ways to run this, from least to most hand-holding:
 ### Option A — the GUI (easiest)
 
 `VrfInsights.Gui` is a small Windows app that wraps everything below into point-and-click steps:
-pick (or browse to) a `.vrf` file, point it at your built `vrfkit.exe` once (it remembers the
-path), pick an output folder, and click **Run**. It shells out to vrfkit and then runs the
-analysis, streaming vrfkit's own output into a log box as it goes.
+pick (or browse to) a `.vrf` file, pick an output folder, and click **Run**.
+
+You don't need to have vrfkit built already. The first time you click **Run** (or the **Set up
+vrfkit automatically** button), the app will, itself, `git clone` vrfkit's repository and run
+`cargo build --release -p vrfkit --features export` — the exact two commands from vrfkit's own
+README, just automated — and cache the resulting `vrfkit.exe` under
+`%LocalAppData%\VrfInsights\vrfkit-src\`. Every run after that finds it instantly, with no
+browsing and no rebuild. This still needs [Git](https://git-scm.com/download/win) and
+[Rust](https://rustup.rs) installed once (Rust also needs the "Desktop development with C++"
+workload from Visual Studio Build Tools, for its linker) — if either is missing, the app tells
+you exactly which one and stops there rather than guessing. If you'd rather point it at a vrfkit
+you already built yourself, the **Browse...** button next to the path box still works too.
 
 ```bash
 dotnet run --project src/VrfInsights.Gui
@@ -104,9 +113,11 @@ dotnet run --project src/VrfInsights.Cli -- dump-classes ./export
   lifecycle, ability casts, combat interactions, economy.
 - **`VrfInsights.Pipeline`** — shells out to `vrfkit.exe` (`VrfkitExportRunner`) and runs the
   analysis (`AnalysisPipeline`); `FullPipeline` composes the two into the "one command" flow.
-  Also has `ReplayDiscovery`, which just lists `.vrf` files already sitting in
-  `%LOCALAPPDATA%\VALORANT\Saved\Demos` for the GUI's picker. This project is the *only* place
-  that ever launches vrfkit — as an ordinary child process, nothing more.
+  `VrfkitBootstrapper` automates `git clone` + `cargo build` for vrfkit itself (see Option A
+  above) so a person never has to. `ReplayDiscovery` lists `.vrf` files already sitting in
+  `%LOCALAPPDATA%\VALORANT\Saved\Demos` for the GUI's picker. `ExternalProcessRunner` is the one
+  shared place that actually launches a child process (vrfkit, git, or cargo) and streams its
+  output — this project is the *only* place that launches any of them.
 - **`VrfInsights.Cli`** — the `vrf-insights` console tool: `run` (the one-command path), `analyze`
   (analysis only, against an export you already made), and the `dump-*` diagnostic commands.
 - **`VrfInsights.Gui`** — a small hand-built WinForms app (`net10.0-windows`) on top of
