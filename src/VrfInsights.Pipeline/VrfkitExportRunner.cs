@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace VrfInsights.Pipeline;
 
 /// <summary>
@@ -18,9 +16,8 @@ public static class VrfkitExportRunner
 {
     public sealed record VrfkitExportResult(bool Success, int ExitCode, string ExportDirectory);
 
-    /// <param name="vrfkitExePath">Path to a vrfkit executable the user built/downloaded
-    /// themselves (see vrfkit's own README) — e.g.
-    /// <c>...\vrfkit\target\release\vrfkit.exe</c>.</param>
+    /// <param name="vrfkitExePath">Path to a vrfkit executable — either built by hand per
+    /// vrfkit's own README, or by <see cref="VrfkitBootstrapper.SetupAsync"/>.</param>
     /// <param name="vrfFilePath">Path to the <c>.vrf</c> replay file to decode.</param>
     /// <param name="exportDirectory">Directory vrfkit should write its Parquet tables and
     /// <c>manifest.json</c> into. Created if it doesn't already exist.</param>
@@ -48,44 +45,17 @@ public static class VrfkitExportRunner
 
         Directory.CreateDirectory(exportDirectory);
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = vrfkitExePath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(vrfkitExePath)) ?? Environment.CurrentDirectory,
-        };
+        string workingDirectory = Path.GetDirectoryName(Path.GetFullPath(vrfkitExePath)) ?? Environment.CurrentDirectory;
+        var arguments = new List<string> { "export", vrfFilePath, "--out", exportDirectory };
 
-        // ArgumentList (not a concatenated string) so paths with spaces need no manual
-        // quoting/escaping.
-        startInfo.ArgumentList.Add("export");
-        startInfo.ArgumentList.Add(vrfFilePath);
-        startInfo.ArgumentList.Add("--out");
-        startInfo.ArgumentList.Add(exportDirectory);
+        ExternalProcessRunner.RunResult result = await ExternalProcessRunner.RunAsync(
+            vrfkitExePath,
+            arguments,
+            workingDirectory: workingDirectory,
+            onOutputLine: onOutputLine,
+            onErrorLine: onErrorLine,
+            ct: ct);
 
-        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data is not null) onOutputLine?.Invoke(e.Data);
-        };
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is not null) onErrorLine?.Invoke(e.Data);
-        };
-
-        if (!process.Start())
-        {
-            throw new InvalidOperationException($"failed to start vrfkit process: {vrfkitExePath}");
-        }
-
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        await process.WaitForExitAsync(ct);
-
-        return new VrfkitExportResult(process.ExitCode == 0, process.ExitCode, exportDirectory);
+        return new VrfkitExportResult(result.Success, result.ExitCode, exportDirectory);
     }
 }

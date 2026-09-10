@@ -10,12 +10,23 @@ namespace VrfInsights.Gui;
 /// positioned in code, so nothing here depends on a designer serializer this project can't
 /// verify at build time).
 ///
-/// This form only ever calls into <see cref="VrfInsights.Pipeline.FullPipeline"/>, which itself
-/// only shells out to an already-built <c>vrfkit.exe</c> as an external process. No decoding or
-/// payload-transform logic lives in this GUI.
+/// This form only ever calls into <see cref="VrfInsights.Pipeline.FullPipeline"/> and
+/// <see cref="VrfInsights.Pipeline.VrfkitBootstrapper"/>, which themselves only launch
+/// already-built or freshly-built <c>vrfkit</c> (and, for the bootstrapper, <c>git</c>/
+/// <c>cargo</c>) as ordinary external processes. No decoding or payload-transform logic lives in
+/// this GUI, and vrfkit's own source is never modified — only fetched and compiled as published.
 /// </summary>
 public sealed class MainForm : Form
 {
+    // Every container that has right-anchored children (GroupBox/Panel) is explicitly sized to
+    // this width *before* those children are added. WinForms computes an Anchor="Right" child's
+    // fixed distance from its parent's right edge at the moment the child is parented — if the
+    // parent is still at its default ~100px width then (because it hasn't been through a Dock
+    // layout pass yet), that distance comes out wrong and the child can end up positioned way
+    // outside the visible window once the parent is later resized to its real width. Giving the
+    // parent its real width first avoids that entirely.
+    private const int ContentWidth = 800;
+
     private readonly AppSettings _settings;
 
     private ComboBox _replayCombo = null!;
@@ -24,6 +35,7 @@ public sealed class MainForm : Form
 
     private TextBox _vrfkitPathBox = null!;
     private Button _browseVrfkitButton = null!;
+    private Button _autoSetupVrfkitButton = null!;
 
     private TextBox _outputDirBox = null!;
     private Button _browseOutputButton = null!;
@@ -40,21 +52,23 @@ public sealed class MainForm : Form
     private TextBox _logBox = null!;
 
     private List<ReplayDiscovery.ReplayFile> _discoveredReplays = new();
-    private bool _isRunning;
+    private string? _manuallyBrowsedReplayPath;
+    private bool _isBusy;
 
     public MainForm()
     {
         _settings = AppSettings.Load();
 
         Text = "VALORANT Replay Insights";
-        Width = 860;
-        Height = 760;
-        MinimumSize = new Size(720, 620);
+        Width = 900;
+        Height = 780;
+        MinimumSize = new Size(760, 640);
         StartPosition = FormStartPosition.CenterScreen;
 
         BuildLayout();
         LoadSettingsIntoControls();
         RefreshReplayList();
+        TryAutoDetectVrfkit();
     }
 
     // ---- Layout -----------------------------------------------------------------------
@@ -69,7 +83,7 @@ public sealed class MainForm : Form
             Padding = new Padding(10),
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
@@ -88,36 +102,39 @@ public sealed class MainForm : Form
     private GroupBox BuildReplayGroup()
     {
         var group = new GroupBox { Text = "1. Replay file (.vrf)", Dock = DockStyle.Fill };
+        group.Size = new Size(ContentWidth, 90); // see ContentWidth's comment — must happen before adding anchored children
 
         var label = new Label { Text = "Detected in your VALORANT replay folder:", Location = new Point(12, 24), AutoSize = true };
 
-        _replayCombo = new ComboBox
+        // Left edge fixed at 12; right edge computed backwards from the two right-anchored
+        // buttons so everything lines up inside ContentWidth with a 12px margin on both sides.
+        _browseReplayButton = new Button
         {
-            Location = new Point(12, 46),
-            Width = 560,
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-            DropDownStyle = ComboBoxStyle.DropDownList,
+            Text = "Browse...",
+            Location = new Point(ContentWidth - 12 - 100, 45),
+            Width = 100,
+            Height = 24,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
+        _browseReplayButton.Click += (_, _) => BrowseForReplay();
 
         _refreshReplaysButton = new Button
         {
             Text = "Refresh",
-            Location = new Point(580, 45),
+            Location = new Point(_browseReplayButton.Location.X - 8 - 80, 45),
             Width = 80,
             Height = 24,
             Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
         _refreshReplaysButton.Click += (_, _) => RefreshReplayList();
 
-        _browseReplayButton = new Button
+        _replayCombo = new ComboBox
         {
-            Text = "Browse...",
-            Location = new Point(666, 45),
-            Width = 90,
-            Height = 24,
-            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            Location = new Point(12, 46),
+            Width = _refreshReplaysButton.Location.X - 8 - 12,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            DropDownStyle = ComboBoxStyle.DropDownList,
         };
-        _browseReplayButton.Click += (_, _) => BrowseForReplay();
 
         group.Controls.Add(label);
         group.Controls.Add(_replayCombo);
@@ -128,60 +145,86 @@ public sealed class MainForm : Form
 
     private GroupBox BuildVrfkitGroup()
     {
-        var group = new GroupBox { Text = "2. vrfkit.exe (decodes the replay — https://github.com/yakisoba0728/vrfkit)", Dock = DockStyle.Fill };
+        var group = new GroupBox { Text = "2. vrfkit (decodes the replay — https://github.com/yakisoba0728/vrfkit)", Dock = DockStyle.Fill };
+        group.Size = new Size(ContentWidth, 130);
 
-        _vrfkitPathBox = new TextBox
-        {
-            Location = new Point(12, 28),
-            Width = 630,
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-        };
+        var pathLabel = new Label { Text = "vrfkit executable path:", Location = new Point(12, 24), AutoSize = true };
 
         _browseVrfkitButton = new Button
         {
             Text = "Browse...",
-            Location = new Point(650, 26),
-            Width = 106,
+            Location = new Point(ContentWidth - 12 - 100, 44),
+            Width = 100,
             Height = 24,
             Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
         _browseVrfkitButton.Click += (_, _) => BrowseForVrfkitExe();
 
+        _vrfkitPathBox = new TextBox
+        {
+            Location = new Point(12, 46),
+            Width = _browseVrfkitButton.Location.X - 8 - 12,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+
+        _autoSetupVrfkitButton = new Button
+        {
+            Text = "Set up vrfkit automatically (download + build)",
+            Location = new Point(12, 82),
+            Width = 320,
+            Height = 28,
+        };
+        _autoSetupVrfkitButton.Click += async (_, _) => await AutoSetupVrfkitAsync();
+
+        var autoSetupHint = new Label
+        {
+            Text = "First time only — needs Git and Rust installed. After that, it's remembered.",
+            Location = new Point(344, 90),
+            Width = ContentWidth - 12 - 344,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            AutoSize = false,
+            ForeColor = SystemColors.GrayText,
+        };
+
+        group.Controls.Add(pathLabel);
         group.Controls.Add(_vrfkitPathBox);
         group.Controls.Add(_browseVrfkitButton);
+        group.Controls.Add(_autoSetupVrfkitButton);
+        group.Controls.Add(autoSetupHint);
         return group;
     }
 
     private GroupBox BuildOutputGroup()
     {
         var group = new GroupBox { Text = "3. Output folder (analysis JSON + the decoded export will be written here)", Dock = DockStyle.Fill };
+        group.Size = new Size(ContentWidth, 70);
 
-        _outputDirBox = new TextBox
+        _openOutputButton = new Button
         {
-            Location = new Point(12, 28),
-            Width = 540,
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            Text = "Open folder",
+            Location = new Point(ContentWidth - 12 - 100, 26),
+            Width = 100,
+            Height = 24,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
+        _openOutputButton.Click += (_, _) => OpenOutputFolder();
 
         _browseOutputButton = new Button
         {
             Text = "Browse...",
-            Location = new Point(560, 26),
+            Location = new Point(_openOutputButton.Location.X - 8 - 90, 26),
             Width = 90,
             Height = 24,
             Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
         _browseOutputButton.Click += (_, _) => BrowseForOutputDirectory();
 
-        _openOutputButton = new Button
+        _outputDirBox = new TextBox
         {
-            Text = "Open folder",
-            Location = new Point(656, 26),
-            Width = 100,
-            Height = 24,
-            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            Location = new Point(12, 28),
+            Width = _browseOutputButton.Location.X - 8 - 12,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
-        _openOutputButton.Click += (_, _) => OpenOutputFolder();
 
         group.Controls.Add(_outputDirBox);
         group.Controls.Add(_browseOutputButton);
@@ -192,6 +235,7 @@ public sealed class MainForm : Form
     private GroupBox BuildOptionsGroup()
     {
         var group = new GroupBox { Text = "4. Options (vision cones are derived from position + facing, not extracted data — see README)", Dock = DockStyle.Fill };
+        group.Size = new Size(ContentWidth, 120);
 
         var fovLabel = new Label { Text = "Field of view (degrees):", Location = new Point(12, 28), AutoSize = true };
         _fovUpDown = new NumericUpDown { Location = new Point(180, 25), Width = 80, Minimum = 1, Maximum = 179, DecimalPlaces = 1, Increment = 1 };
@@ -222,6 +266,7 @@ public sealed class MainForm : Form
     private Panel BuildRunPanel()
     {
         var panel = new Panel { Dock = DockStyle.Fill };
+        panel.Size = new Size(ContentWidth, 80);
 
         _runButton = new Button
         {
@@ -236,7 +281,8 @@ public sealed class MainForm : Form
         {
             Text = "Ready.",
             Location = new Point(224, 18),
-            Width = 600,
+            Width = ContentWidth - 12 - 224,
+            Height = 20,
             AutoSize = false,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
@@ -244,7 +290,7 @@ public sealed class MainForm : Form
         _progressBar = new ProgressBar
         {
             Location = new Point(12, 50),
-            Width = 812,
+            Width = ContentWidth - 12 - 12,
             Height = 18,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             Style = ProgressBarStyle.Marquee,
@@ -304,12 +350,32 @@ public sealed class MainForm : Form
         _settings.Save();
     }
 
+    /// <summary>On startup, if no vrfkit path is remembered yet, check whether one was already
+    /// built by a previous <see cref="VrfkitBootstrapper.SetupAsync"/> run (or lives at the
+    /// bootstrapper's well-known location for some other reason) and use it silently — no
+    /// browsing, no button click needed.</summary>
+    private void TryAutoDetectVrfkit()
+    {
+        if (!string.IsNullOrWhiteSpace(_vrfkitPathBox.Text) && File.Exists(_vrfkitPathBox.Text))
+        {
+            return;
+        }
+
+        string? found = VrfkitBootstrapper.FindExisting();
+        if (found is not null)
+        {
+            _vrfkitPathBox.Text = found;
+            SaveSettingsFromControls();
+        }
+    }
+
     // ---- Replay discovery / browsing -----------------------------------------------------
 
     private void RefreshReplayList()
     {
         _discoveredReplays = ReplayDiscovery.FindReplays().ToList();
         _replayCombo.Items.Clear();
+        _manuallyBrowsedReplayPath = null;
 
         if (_discoveredReplays.Count == 0)
         {
@@ -330,15 +396,18 @@ public sealed class MainForm : Form
 
     private string? SelectedReplayPath()
     {
+        if (_manuallyBrowsedReplayPath is not null)
+        {
+            return _manuallyBrowsedReplayPath;
+        }
+
         if (_replayCombo.Enabled && _replayCombo.SelectedIndex >= 0 && _replayCombo.SelectedIndex < _discoveredReplays.Count)
         {
             return _discoveredReplays[_replayCombo.SelectedIndex].FullPath;
         }
 
-        return _manuallyBrowsedReplayPath;
+        return null;
     }
-
-    private string? _manuallyBrowsedReplayPath;
 
     private void BrowseForReplay()
     {
@@ -352,11 +421,11 @@ public sealed class MainForm : Form
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             _manuallyBrowsedReplayPath = dialog.FileName;
+            _discoveredReplays = new List<ReplayDiscovery.ReplayFile>();
             _replayCombo.Items.Clear();
             _replayCombo.Items.Add($"{Path.GetFileName(dialog.FileName)}  (manually selected)");
-            _replayCombo.SelectedIndex = 0;
             _replayCombo.Enabled = true;
-            _discoveredReplays = new List<ReplayDiscovery.ReplayFile>();
+            _replayCombo.SelectedIndex = 0;
         }
     }
 
@@ -371,6 +440,7 @@ public sealed class MainForm : Form
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             _vrfkitPathBox.Text = dialog.FileName;
+            SaveSettingsFromControls();
         }
     }
 
@@ -412,44 +482,109 @@ public sealed class MainForm : Form
         }
     }
 
+    // ---- vrfkit automatic setup ------------------------------------------------------------
+
+    private async Task AutoSetupVrfkitAsync()
+    {
+        if (_isBusy) return;
+
+        SetBusy(true, "Setting up vrfkit...");
+        _logBox.Clear();
+
+        try
+        {
+            VrfkitBootstrapper.SetupResult result = await VrfkitBootstrapper.SetupAsync(
+                onStatus: SetStatus,
+                onLogLine: AppendLog);
+
+            if (result.Success && result.VrfkitExePath is not null)
+            {
+                _vrfkitPathBox.Text = result.VrfkitExePath;
+                SaveSettingsFromControls();
+                MessageBox.Show(this, "vrfkit is set up and ready to use.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                MessageBox.Show(this, result.FailureReason ?? "Setting up vrfkit failed — see the log for details.", "Setup failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Failed.");
+            AppendLog($"ERROR: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "Something went wrong", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false, "Ready.");
+        }
+    }
+
+    /// <summary>Resolves a usable vrfkit executable path for Run: whatever's already typed in
+    /// the box if it exists, otherwise a previous build at the well-known location, otherwise
+    /// runs setup right now (so Run "just works" the first time too, without a separate click).
+    /// Returns null (having already shown the reason) if no usable vrfkit could be found.</summary>
+    private async Task<string?> ResolveVrfkitPathAsync()
+    {
+        string typed = _vrfkitPathBox.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(typed) && File.Exists(typed))
+        {
+            return typed;
+        }
+
+        string? existing = VrfkitBootstrapper.FindExisting();
+        if (existing is not null)
+        {
+            _vrfkitPathBox.Text = existing;
+            return existing;
+        }
+
+        AppendLog("No vrfkit found yet — setting it up automatically (this only happens once)...");
+        VrfkitBootstrapper.SetupResult result = await VrfkitBootstrapper.SetupAsync(onStatus: SetStatus, onLogLine: AppendLog);
+        if (result.Success && result.VrfkitExePath is not null)
+        {
+            _vrfkitPathBox.Text = result.VrfkitExePath;
+            return result.VrfkitExePath;
+        }
+
+        MessageBox.Show(this, result.FailureReason ?? "Couldn't set up vrfkit automatically — see the log for details.", "vrfkit not available", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        return null;
+    }
+
     // ---- Run ------------------------------------------------------------------------------
 
     private async Task RunButtonClickAsync()
     {
-        if (_isRunning) return;
+        if (_isBusy) return;
 
         string? vrfFile = SelectedReplayPath();
-        string vrfkitPath = _vrfkitPathBox.Text.Trim();
-        string outputDir = _outputDirBox.Text.Trim();
-
         if (string.IsNullOrWhiteSpace(vrfFile) || !File.Exists(vrfFile))
         {
             MessageBox.Show(this, "Pick a replay (.vrf) file first.", "No replay selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(vrfkitPath) || !File.Exists(vrfkitPath))
-        {
-            MessageBox.Show(this, "Point this at your vrfkit executable first (Browse... in section 2).", "vrfkit not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
+        string outputDir = _outputDirBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(outputDir))
         {
             MessageBox.Show(this, "Choose an output folder first.", "No output folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        SaveSettingsFromControls();
-
-        _isRunning = true;
-        _runButton.Enabled = false;
+        SetBusy(true, "Starting...");
         _logBox.Clear();
-        _progressBar.MarqueeAnimationSpeed = 30;
-        SetStatus("Starting...");
 
         try
         {
+            string? vrfkitPath = await ResolveVrfkitPathAsync();
+            if (vrfkitPath is null)
+            {
+                SetStatus("Ready.");
+                return;
+            }
+
+            SaveSettingsFromControls();
+
             string exportDir = Path.Combine(outputDir, "export");
             var options = new FullPipeline.FullPipelineOptions(
                 VrfFilePath: vrfFile,
@@ -487,16 +622,23 @@ public sealed class MainForm : Form
         }
         finally
         {
-            _progressBar.MarqueeAnimationSpeed = 0;
-            _runButton.Enabled = true;
-            _isRunning = false;
+            SetBusy(false, "Ready.");
         }
     }
 
-    // ---- Thread-safe UI updates -------------------------------------------------------------
+    // ---- Busy state / thread-safe UI updates ------------------------------------------------
     // Process.OutputDataReceived/ErrorDataReceived fire on background I/O threads, not the UI
     // thread, so every log/status update is marshaled through InvokeRequired/BeginInvoke rather
     // than assuming the caller is already on the UI thread.
+
+    private void SetBusy(bool busy, string status)
+    {
+        _isBusy = busy;
+        _runButton.Enabled = !busy;
+        _autoSetupVrfkitButton.Enabled = !busy;
+        _progressBar.MarqueeAnimationSpeed = busy ? 30 : 0;
+        SetStatus(status);
+    }
 
     private void SetStatus(string text)
     {
