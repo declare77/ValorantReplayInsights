@@ -29,6 +29,36 @@ already produced.
 
 ## Pipeline
 
+There are three ways to run this, from least to most hand-holding:
+
+### Option A — the GUI (easiest)
+
+`VrfInsights.Gui` is a small Windows app that wraps everything below into point-and-click steps:
+pick (or browse to) a `.vrf` file, point it at your built `vrfkit.exe` once (it remembers the
+path), pick an output folder, and click **Run**. It shells out to vrfkit and then runs the
+analysis, streaming vrfkit's own output into a log box as it goes.
+
+```bash
+dotnet run --project src/VrfInsights.Gui
+```
+
+### Option B — one command (`run`)
+
+`vrf-insights run` wraps the same two steps (`vrfkit export` + `vrf-insights analyze`) into a
+single CLI invocation, so you don't have to hop between vrfkit and this tool by hand:
+
+```bash
+dotnet run --project src/VrfInsights.Cli -- run path/to/match.vrf \
+    --vrfkit path/to/vrfkit.exe \
+    --out ./analysis \
+    --with-vision
+```
+
+This decodes the replay into `./analysis/export/` (override with `--export-dir`) and then writes
+the same analysis JSON described below into `./analysis/`.
+
+### Option C — the two steps yourself
+
 ```bash
 # 1. Decode the replay with vrfkit (once per replay) — see https://github.com/yakisoba0728/vrfkit
 cargo +1.86.0 build --release -p vrfkit --features export --locked
@@ -37,6 +67,11 @@ cargo +1.86.0 build --release -p vrfkit --features export --locked
 # 2. Analyze vrfkit's output with this project
 dotnet run --project src/VrfInsights.Cli -- analyze ./export --out ./analysis --with-vision
 ```
+
+Whichever path you take, **this repository still never opens a `.vrf` file or contains any
+decoding/descrambling code itself** — `run` and the GUI both just launch vrfkit.exe as an
+ordinary external process (`System.Diagnostics.Process`) and then read the Parquet/JSON it
+already wrote, exactly like Option C does by hand.
 
 `analysis/` then contains:
 
@@ -67,7 +102,15 @@ dotnet run --project src/VrfInsights.Cli -- dump-classes ./export
   `game_specific_data`'s `playerLoadouts`), movement tracks, vision cones (computed — VALORANT's
   replay doesn't carry a "vision cone" field, see below), round timeline, utility/persistent-effect
   lifecycle, ability casts, combat interactions, economy.
-- **`VrfInsights.Cli`** — the `vrf-insights` console tool tying it together.
+- **`VrfInsights.Pipeline`** — shells out to `vrfkit.exe` (`VrfkitExportRunner`) and runs the
+  analysis (`AnalysisPipeline`); `FullPipeline` composes the two into the "one command" flow.
+  Also has `ReplayDiscovery`, which just lists `.vrf` files already sitting in
+  `%LOCALAPPDATA%\VALORANT\Saved\Demos` for the GUI's picker. This project is the *only* place
+  that ever launches vrfkit — as an ordinary child process, nothing more.
+- **`VrfInsights.Cli`** — the `vrf-insights` console tool: `run` (the one-command path), `analyze`
+  (analysis only, against an export you already made), and the `dump-*` diagnostic commands.
+- **`VrfInsights.Gui`** — a small hand-built WinForms app (`net10.0-windows`) on top of
+  `VrfInsights.Pipeline`, for people who'd rather click buttons than type CLI flags.
 - **`VrfInsights.Tests`** — xUnit tests for the pure-logic pieces (array-flattening pivot, vision
   cone geometry, round/event attribution, utility open/dormant/close state machine).
 
@@ -120,15 +163,25 @@ What's a documented **assumption**, flagged in code comments, and worth checking
 - `events.characterUltimateUsed` overcounts actual ultimate casts by ~51.5% per vrfkit's own
   measurement (it's the easy signal, not the precise one — see `UltimateUsageBuilder`'s remarks).
 
+`VrfInsights.Pipeline` and `VrfInsights.Gui` are new and carry the same caveat as the rest of
+this project — please actually click through the GUI once (or run `vrf-insights run`) before
+trusting it blindly. The WinForms UI is hand-coded (no designer/`.resx` file) specifically so
+there's nothing beyond ordinary, well-documented `System.Windows.Forms` API calls in it, but I
+still have no way to compile or visually check it myself.
+
 Nothing above affects the parts most central to what was asked — movement, utility/smoke
 placement and lifetime, agents, and round/event structure all rest on directly-documented,
 cross-validated columns.
 
 ## Requirements
 
-- .NET 10 SDK (targets `net10.0`; drop the `<TargetFramework>` in each `.csproj` to `net8.0` if you're on an older SDK instead)
-- A vrfkit export directory (`vrfkit export <file.vrf> --out <dir>`) — see
-  [vrfkit](https://github.com/yakisoba0728/vrfkit) for build instructions (Rust 1.86+)
+- .NET 10 SDK (targets `net10.0`, and `net10.0-windows` for the GUI; drop the `<TargetFramework>`
+  in each `.csproj` to `net8.0`/`net8.0-windows` if you're on an older SDK instead)
+- `VrfInsights.Gui` only builds/runs on Windows (`net10.0-windows` + WinForms) — the CLI and the
+  `run` command work anywhere the .NET SDK does, same as vrfkit itself
+- A built `vrfkit.exe`/`vrfkit` binary (Rust 1.86+) — either point `run`/the GUI at it, or run
+  `vrfkit export <file.vrf> --out <dir>` yourself first and use `analyze` — see
+  [vrfkit](https://github.com/yakisoba0728/vrfkit) for build instructions
 
 ## Disclaimer
 

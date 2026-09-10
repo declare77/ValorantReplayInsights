@@ -1,15 +1,11 @@
-using System.Text.Json;
-using VrfInsights.Analysis;
-using VrfInsights.Analysis.Identity;
 using VrfInsights.Analysis.Vision;
 using VrfInsights.Data;
+using VrfInsights.Pipeline;
 
 namespace VrfInsights.Cli;
 
 public static class Program
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     public static async Task<int> Main(string[] args)
     {
         if (args.Length == 0)
@@ -22,6 +18,7 @@ public static class Program
         {
             return args[0] switch
             {
+                "run" => await RunFullPipelineAsync(args[1..]),
                 "analyze" => await RunAnalyzeAsync(args[1..]),
                 "dump-fields" => await RunDumpFieldsAsync(args[1..]),
                 "dump-classes" => await RunDumpClassesAsync(args[1..]),
@@ -36,15 +33,47 @@ public static class Program
         }
     }
 
+    // vrf-insights run <file.vrf> --vrfkit <path-to-vrfkit-exe> [--export-dir <dir>] --out <dir>
+    //     [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
+    //
+    // The "one smooth command": decodes the replay with vrfkit, then runs the analysis on
+    // vrfkit's output, in a single invocation. Equivalent to running `vrfkit export` yourself
+    // and then `vrf-insights analyze`, just without the two-tool hop.
+    private static async Task<int> RunFullPipelineAsync(string[] args)
+    {
+        string? vrfFile = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : null;
+        string? vrfkitExe = GetOption(args, "--vrfkit");
+        string outDir = GetOption(args, "--out") ?? "vrf-insights-out";
+        string exportDir = GetOption(args, "--export-dir") ?? Path.Combine(outDir, "export");
+        AnalysisPipelineOptions analysisOptions = ParseAnalysisOptions(args);
+
+        if (vrfFile is null || vrfkitExe is null)
+        {
+            Console.Error.WriteLine("usage: vrf-insights run <file.vrf> --vrfkit <path-to-vrfkit(.exe)> --out <output-dir> [--export-dir <dir>] [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]");
+            return 1;
+        }
+
+        var options = new FullPipeline.FullPipelineOptions(
+            VrfFilePath: vrfFile,
+            VrfkitExePath: vrfkitExe,
+            ExportDirectory: exportDir,
+            OutputDirectory: outDir,
+            AnalysisOptions: analysisOptions);
+
+        FullPipeline.FullPipelineResult result = await FullPipeline.RunAsync(
+            options,
+            onStatus: Console.WriteLine,
+            onLogLine: line => Console.WriteLine($"  {line}"));
+
+        return result.ExportSucceeded ? 0 : 1;
+    }
+
     // vrf-insights analyze <export-dir> --out <out-dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
     private static async Task<int> RunAnalyzeAsync(string[] args)
     {
         string? exportDir = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : null;
         string outDir = GetOption(args, "--out") ?? "vrf-insights-out";
-        double fov = double.Parse(GetOption(args, "--fov") ?? VisionConeCalculator.DefaultFovDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
-        double range = double.Parse(GetOption(args, "--range") ?? VisionConeCalculator.DefaultRangeCm.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
-        double eyeHeight = double.Parse(GetOption(args, "--eye-height") ?? VisionConeCalculator.EyeHeightCm.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
-        bool withVision = HasFlag(args, "--with-vision");
+        AnalysisPipelineOptions analysisOptions = ParseAnalysisOptions(args);
 
         if (exportDir is null)
         {
@@ -52,48 +81,17 @@ public static class Program
             return 1;
         }
 
-        Console.WriteLine($"Loading vrfkit export from: {exportDir}");
-        VrfExportSet export = await VrfExportSet.LoadAsync(exportDir);
-
-        Console.WriteLine($"Build: {export.Manifest.ReplayBuild}   Duration: {export.Manifest.DurationMs} ms");
-        Console.WriteLine($"Tables: fields={export.Fields.Count:N0} movement={export.Movement.Count:N0} actors={export.Actors.Count:N0} net_guids={export.NetGuids.Count:N0} events={export.Events.Count:N0}");
-
-        AgentCatalog agentCatalog = AgentCatalog.LoadEmbedded();
-        MatchAnalysis analysis = MatchAnalysis.Build(export, agentCatalog, new VisionConeOptions(fov, range, eyeHeight));
-
-        Directory.CreateDirectory(outDir);
-
-        await WriteJsonAsync(Path.Combine(outDir, "match.json"), new
-        {
-            analysis.ReplayBuild,
-            analysis.DurationMs,
-            Players = analysis.Players,
-            Rounds = analysis.Rounds,
-        });
-
-        await WriteJsonAsync(Path.Combine(outDir, "events.json"), analysis.Events);
-        await WriteJsonAsync(Path.Combine(outDir, "movement.json"), analysis.MovementTracks);
-        await WriteJsonAsync(Path.Combine(outDir, "utility.json"), analysis.Utility);
-        await WriteJsonAsync(Path.Combine(outDir, "ability_casts.json"), analysis.AbilityCasts);
-        await WriteJsonAsync(Path.Combine(outDir, "ultimate_usages.json"), analysis.UltimateUsages);
-        await WriteJsonAsync(Path.Combine(outDir, "combat_interactions.json"), analysis.CombatInteractions);
-        await WriteJsonAsync(Path.Combine(outDir, "economy.json"), analysis.Economy);
-
-        if (withVision)
-        {
-            var visionByPlayer = new Dictionary<string, object>();
-            foreach (var track in analysis.MovementTracks)
-            {
-                string label = track.Player.Subject ?? $"actor_{track.Player.ActorNetGuid}";
-                visionByPlayer[label] = analysis.BuildVisionCones(track, new VisionConeOptions(fov, range, eyeHeight));
-            }
-
-            await WriteJsonAsync(Path.Combine(outDir, "vision_cones.json"), visionByPlayer);
-        }
-
-        Console.WriteLine($"Wrote analysis output to: {Path.GetFullPath(outDir)}");
-        Console.WriteLine($"Players: {analysis.Players.Count}   Rounds: {analysis.Rounds.Count}   Utility events: {analysis.Utility.Count}   Ability casts: {analysis.AbilityCasts.Count}   Combat interactions: {analysis.CombatInteractions.Count}");
+        await AnalysisPipeline.RunAsync(exportDir, outDir, analysisOptions, onStatus: Console.WriteLine);
         return 0;
+    }
+
+    private static AnalysisPipelineOptions ParseAnalysisOptions(string[] args)
+    {
+        double fov = double.Parse(GetOption(args, "--fov") ?? VisionConeCalculator.DefaultFovDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
+        double range = double.Parse(GetOption(args, "--range") ?? VisionConeCalculator.DefaultRangeCm.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
+        double eyeHeight = double.Parse(GetOption(args, "--eye-height") ?? VisionConeCalculator.EyeHeightCm.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
+        bool withVision = HasFlag(args, "--with-vision");
+        return new AnalysisPipelineOptions(fov, range, eyeHeight, withVision);
     }
 
     // Diagnostic helper: print distinct field_name values under a group_path substring, so you
@@ -158,12 +156,6 @@ public static class Program
         return 0;
     }
 
-    private static async Task WriteJsonAsync<T>(string path, T value)
-    {
-        await using FileStream fs = File.Create(path);
-        await JsonSerializer.SerializeAsync(fs, value, JsonOptions);
-    }
-
     private static string? GetOption(string[] args, string name)
     {
         for (int i = 0; i < args.Length - 1; i++)
@@ -196,14 +188,25 @@ public static class Program
     {
         Console.WriteLine("""
             vrf-insights — analysis/visualization layer on top of vrfkit's decoded VALORANT replay tables.
-            This tool never opens a .vrf file itself: run vrfkit first, then point this at its output.
+            This tool never opens a .vrf file itself: it shells out to vrfkit (an external, independent
+            tool) to decode, then only reads vrfkit's already-decoded output.
 
+            Easiest path — one command that does both steps:
+              vrf-insights run <file.vrf> --vrfkit <path-to-vrfkit(.exe)> --out <output-dir> [options]
+
+            Or run the two steps yourself:
               1) vrfkit export <file.vrf> --out <export-dir>      (https://github.com/yakisoba0728/vrfkit)
               2) vrf-insights analyze <export-dir> --out <output-dir> [options]
 
             Commands:
+              run <file.vrf> --vrfkit <path> --out <dir> [--export-dir <dir>] [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
+                  Decode the replay with vrfkit and analyze it, in one step. --export-dir defaults
+                  to <out>/export if not given (so vrfkit's raw tables are kept alongside the
+                  analysis JSON, in case you want to inspect them with dump-fields/dump-classes).
+
               analyze <export-dir> --out <dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
-                  Build the full match analysis and write it out as JSON files.
+                  Build the full match analysis from an existing vrfkit export and write it out
+                  as JSON files.
 
               dump-fields <export-dir> [--group <substring>] [--limit 50]
                   Print distinct (group_path, field_name) pairs — useful for confirming this
