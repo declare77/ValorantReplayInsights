@@ -62,8 +62,28 @@ This still needs the .NET SDK installed (once, same as everything else here), bu
 produces — `publish\gui\VrfInsights.Gui.exe` — is fully standalone (the .NET runtime is bundled
 inside it), so from then on you just double-click it, or the desktop shortcut `-Shortcut` creates
 for you. Re-run the script any time you pull code changes to rebuild it. If PowerShell refuses to
-run it (`running scripts is disabled on this system`), see the execution-policy note under
-"one-time setup" in the 2D replay viewer section below — same fix, same cause.
+run it (`running scripts is disabled on this system`, or `is not digitally signed`), see the
+execution-policy note under "one-time setup" in the 2D replay viewer section below.
+
+If your machine's policy is locked down enough that even `-ExecutionPolicy Bypass` won't run a
+`.ps1` at all (some managed/work laptops), skip the script entirely — this is the exact command it
+runs, and typing/pasting it directly at a PowerShell prompt isn't a script file, so the execution
+policy doesn't apply to it:
+
+```powershell
+dotnet publish src\VrfInsights.Gui\VrfInsights.Gui.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o publish\gui
+```
+
+That writes `publish\gui\VrfInsights.Gui.exe`. To also pin a desktop shortcut to it without the
+script, paste this too:
+
+```powershell
+$s = New-Object -ComObject WScript.Shell
+$lnk = $s.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\VRF Insights.lnk")
+$lnk.TargetPath = "$PWD\publish\gui\VrfInsights.Gui.exe"
+$lnk.WorkingDirectory = "$PWD\publish\gui"
+$lnk.Save()
+```
 
 ### Option B — one command (`run`)
 
