@@ -112,12 +112,19 @@ Default is 10/sec, which is still smooth once the viewer interpolates between sa
 GUI always uses the default of 10). If you already have an old, oversized `movement.json` from
 before this existed, delete it and re-run `analyze`/`run`.
 
-Two diagnostic commands help you verify or extend the assumptions below against your own export:
+Three diagnostic commands help you verify or extend the assumptions below against your own export:
 
 ```bash
 dotnet run --project src/VrfInsights.Cli -- dump-fields ./export --group Comp_AbilityStatisticsReplicator
+dotnet run --project src/VrfInsights.Cli -- dump-values ./export --field CastLocation
 dotnet run --project src/VrfInsights.Cli -- dump-classes ./export
 ```
+
+`dump-fields` shows you the real `field_name`s (dump-fields already caught one wrong assumption
+this way — `CastLocation` doesn't flatten into `.X`/`.Y`/`.Z` children after all, see below).
+`dump-values` goes a level deeper once you have a real name in hand: it prints the actual
+per-row values (every `Value*` column, plus a hex preview of `RawBits`) for fields matching a
+substring, so you can see *how* a field is encoded instead of guessing from its name.
 
 ## 2D replay viewer
 
@@ -329,11 +336,18 @@ What's schema-verified against vrfkit's own documentation and source (`docs/USAG
   vrfkit's own `tools/extract_spike_carrier.py` uses to find the planter, per `docs/DATA.md`'s
   "Spike carrier"/"Planter" rows.
 
-What's a documented **assumption**, flagged in code comments, and worth checking with
-`dump-fields`/`dump-classes` against your own export before trusting:
+**Known broken, confirmed against a real export (not a guess anymore):** `AbilityCastBuilder`
+assumed `CastLocation` (an `FVector`) flattens into `CastLocation.X`/`.Y`/`.Z` child fields, the
+way some other nested members do elsewhere. `dump-fields` against a real replay showed this is
+wrong — `CastLocation` comes through as a single field (`CastLocation_21_<hash>`, no `.X`/`.Y`/`.Z`
+suffix at all), so `CastX`/`CastY`/`CastZ` in `ability_casts.json` are always `null` right now, and
+the viewer's ability-cast markers never draw. Fixing this needs `dump-values` to see how that
+single field is actually encoded (a formatted string? raw bits that need manual float decoding?)
+before writing a real decoder instead of guessing a second naming scheme — see the command above.
 
-- That `CastLocation` (an `FVector`) flattens as `CastLocation.X`/`.Y`/`.Z` child fields — this
-  specific sub-field naming wasn't independently confirmed against a real export.
+What's a documented **assumption**, flagged in code comments, and worth checking with
+`dump-fields`/`dump-values`/`dump-classes` against your own export before trusting:
+
 - `MoneyManagementComponent`'s rows are joined to a player by `actor_net_guid` directly, assuming
   it replicates on the player's own PlayerState actor rather than a subobject.
 - `UtilityEffectClassifier`'s keyword list is a starting point, not a per-agent catalogue — run

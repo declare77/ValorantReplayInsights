@@ -22,6 +22,7 @@ public static class Program
                 "analyze" => await RunAnalyzeAsync(args[1..]),
                 "dump-fields" => await RunDumpFieldsAsync(args[1..]),
                 "dump-classes" => await RunDumpClassesAsync(args[1..]),
+                "dump-values" => await RunDumpValuesAsync(args[1..]),
                 "-h" or "--help" or "help" => PrintUsageAndReturn(),
                 _ => PrintUnknownCommand(args[0]),
             };
@@ -135,6 +136,54 @@ public static class Program
         return 0;
     }
 
+    // Diagnostic helper: print the actual row-level values (not just names) for fields matching
+    // a substring, so you can see how a given member is really encoded (a plain scalar via one of
+    // the Value* overlay columns, a formatted string, or something only decodable from RawBits)
+    // instead of guessing from the name alone. Complements dump-fields.
+    private static async Task<int> RunDumpValuesAsync(string[] args)
+    {
+        string? exportDir = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : null;
+        string? fieldFilter = GetOption(args, "--field");
+        string? groupFilter = GetOption(args, "--group");
+        int limit = int.Parse(GetOption(args, "--limit") ?? "20", System.Globalization.CultureInfo.InvariantCulture);
+
+        if (exportDir is null || fieldFilter is null)
+        {
+            Console.Error.WriteLine("usage: vrf-insights dump-values <vrfkit-export-dir> --field <substring> [--group <substring>] [--limit 20]");
+            return 1;
+        }
+
+        VrfExportSet export = await VrfExportSet.LoadAsync(exportDir);
+        int shown = 0;
+        foreach (var row in export.Fields)
+        {
+            if (row.FieldName is null || !row.FieldName.Contains(fieldFilter, StringComparison.OrdinalIgnoreCase)) continue;
+            if (groupFilter is not null && !row.GroupPath.Contains(groupFilter, StringComparison.OrdinalIgnoreCase)) continue;
+
+            string rawHex = row.RawBits is null
+                ? "(none)"
+                : Convert.ToHexString(row.RawBits.Length > 32 ? row.RawBits[..32] : row.RawBits) + (row.RawBits.Length > 32 ? "..." : "");
+
+            Console.WriteLine(
+                $"t={row.TimeMs} actor={row.ActorNetGuid} field={row.FieldName} bits={row.BitCount} " +
+                $"i64={row.ValueI64?.ToString() ?? "null"} f64={row.ValueF64?.ToString() ?? "null"} " +
+                $"bool={row.ValueBool?.ToString() ?? "null"} str={row.ValueStr ?? "null"} raw={rawHex}");
+
+            if (++shown >= limit) break;
+        }
+
+        if (shown == 0)
+        {
+            Console.WriteLine("(no rows matched -- check --field/--group substrings against dump-fields output)");
+        }
+        else
+        {
+            Console.WriteLine($"(showing {shown} matching row(s), --limit {limit})");
+        }
+
+        return 0;
+    }
+
     // Diagnostic helper: print distinct actor class_path values, to help extend
     // UtilityEffectClassifier's keyword table against your own export.
     private static async Task<int> RunDumpClassesAsync(string[] args)
@@ -222,6 +271,11 @@ public static class Program
               dump-fields <export-dir> [--group <substring>] [--limit 50]
                   Print distinct (group_path, field_name) pairs — useful for confirming this
                   project's assumptions about field naming against your own export.
+
+              dump-values <export-dir> --field <substring> [--group <substring>] [--limit 20]
+                  Print actual row-level values (time, actor, bit count, every Value* column, and
+                  a hex preview of RawBits) for fields whose name contains --field — use this
+                  after dump-fields to see how a field is really encoded, not just what it's named.
 
               dump-classes <export-dir>
                   Print distinct actor class_path values seen in actors.parquet — useful for

@@ -23,13 +23,17 @@ namespace VrfInsights.Analysis.Abilities;
 /// so the same (Round, Slot, Subject) cast can appear many times. This builder keeps only the
 /// earliest snapshot per array index per actor, per vrfkit's own recommendation.</para>
 ///
-/// <para><b>CastLocation:</b> this assumes vrfkit flattens the nested FVector as
-/// <c>CastLocation.X</c> / <c>.Y</c> / <c>.Z</c> child fields (matching the child-row convention
-/// vrfkit documents elsewhere, e.g. <c>LifeChangeEvents[i].LifeResult</c>). That specific
-/// sub-field naming was not independently confirmed against a real export while building this —
-/// if your export's <c>field_name</c>s for this group use a different suffix, the X/Y/Z here
-/// will simply come back null; run <c>vrf-insights dump-fields --group Comp_AbilityStatisticsReplicator</c>
-/// (see the CLI) to see the real names and adjust <see cref="VectorMemberSuffixes"/> below.</para>
+/// <para><b>CastLocation is currently broken -- confirmed, not just suspected.</b> This used to
+/// assume vrfkit flattens the nested FVector as <c>CastLocation.X</c> / <c>.Y</c> / <c>.Z</c>
+/// child fields. Checked against a real export via <c>vrf-insights dump-fields --group
+/// Comp_AbilityStatisticsReplicator</c>: that's wrong. <c>CastLocation</c> comes through as ONE
+/// field (named e.g. <c>CastLocation_21_&lt;hash&gt;</c> -- the numeric+hash suffix is vrfkit's own
+/// handle-disambiguation, not something to match on), not three. So <see cref="VectorMemberSuffixes"/>
+/// below never matches anything right now, and <see cref="AbilityCastEvent.CastX"/>/<c>CastY</c>/
+/// <c>CastZ</c> always come back null. Before "fixing" this by guessing a second naming scheme,
+/// run <c>vrf-insights dump-values --field CastLocation</c> (see the CLI) against a real export to
+/// see how that single field is actually encoded -- a formatted string, or raw bits needing a
+/// manual float decode -- and write the real decoder from that, not from another guess.</para>
 /// </summary>
 public static class AbilityCastBuilder
 {
