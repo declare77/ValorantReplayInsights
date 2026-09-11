@@ -24,6 +24,22 @@ public sealed record PersistentEffectEvent(
 /// lifecycle, honoring vrfkit's documented distinction: a "dormant" close means the server
 /// stopped replicating an actor that is still alive (it can "wake up" as another "open" later),
 /// and is <b>not</b> a despawn — only a genuine non-dormant "close" ends an effect's lifetime.
+///
+/// <para><b>One ability cast can spawn several separately-classified actors</b> (confirmed via
+/// <c>dump-actors</c> against a real export, for both Omen's and Jett's smoke): an
+/// <c>Ability_*</c> per-player container that opens once near match start at that player's spawn
+/// point, a <c>Projectile_*</c> actor that opens per-cast and closes quickly (the in-flight
+/// grenade), and — where the ability has one — a <c>Zone_*</c>/<c>*Zone</c> actor that opens
+/// slightly after the projectile and stays open for the effect's real duration (the deployed
+/// smoke cloud). Naively classifying every one of these as its own placement produces exactly
+/// the reported bug ("some of them just end up in spawn"): the <c>Ability_*</c> container's
+/// position is always near spawn, since that's where that player was when it opened at t≈0.
+/// This builder (1) excludes <c>Ability_*</c> containers entirely — see
+/// <see cref="UtilityEffectClassifier.IsAbilityContainerActor"/> — and (2), per ability (agent +
+/// ability slot, via <see cref="UtilityEffectClassifier.ExtractAbilityGroupKey"/>), prefers a
+/// <c>Zone</c>-named actor's position over a sibling <c>Projectile</c>-named one when both exist,
+/// since the Zone actor's open/close window is the one that actually matches real ability
+/// durations. Abilities with no separate Zone actor are unaffected.</para>
 /// </summary>
 public static class UtilityTimelineBuilder
 {
@@ -52,6 +68,13 @@ public static class UtilityTimelineBuilder
                 UtilityCategory category = UtilityEffectClassifier.Classify(row.ClassPath);
                 if (category == UtilityCategory.Unclassified)
                 {
+                    continue;
+                }
+
+                if (UtilityEffectClassifier.IsAbilityContainerActor(row.ClassPath))
+                {
+                    // Per-player ability-slot container, not a per-cast placement -- see the
+                    // class doc comment above. Its position is never meaningful here.
                     continue;
                 }
 
@@ -99,7 +122,51 @@ public static class UtilityTimelineBuilder
                 YawDegrees: entry.OpenRow.SpawnYaw));
         }
 
-        results.Sort((a, b) => a.SpawnTimeMs.CompareTo(b.SpawnTimeMs));
-        return results;
+        List<PersistentEffectEvent> deduped = PreferZoneOverNonZoneSiblings(results);
+        deduped.Sort((a, b) => a.SpawnTimeMs.CompareTo(b.SpawnTimeMs));
+        return deduped;
+    }
+
+    /// <summary>
+    /// Per ability (agent + slot — see <see cref="UtilityEffectClassifier.ExtractAbilityGroupKey"/>),
+    /// if a <c>Zone</c>-named actor was seen at all for that ability, drops every event for that
+    /// same ability whose class name does *not* itself contain "Zone" (e.g. the
+    /// <c>Projectile_*</c> sibling). Confirmed via <c>dump-actors</c> for smoke: the Zone actor's
+    /// open/close window matches the ability's real on-field duration, while the Projectile
+    /// actor's is much shorter (its in-flight time) and its recorded position is a different
+    /// point than where the effect actually settled. Abilities with no Zone-named actor at all
+    /// are left untouched, since there's nothing to prefer it over.
+    /// </summary>
+    private static List<PersistentEffectEvent> PreferZoneOverNonZoneSiblings(List<PersistentEffectEvent> events)
+    {
+        var groupsWithZone = new HashSet<string>();
+        foreach (PersistentEffectEvent evt in events)
+        {
+            string? group = UtilityEffectClassifier.ExtractAbilityGroupKey(evt.ClassPath);
+            string? name = UtilityEffectClassifier.ClassNameSegment(evt.ClassPath);
+            if (group is not null && name is not null && name.Contains("Zone", StringComparison.OrdinalIgnoreCase))
+            {
+                groupsWithZone.Add(group);
+            }
+        }
+
+        if (groupsWithZone.Count == 0)
+        {
+            return events;
+        }
+
+        var filtered = new List<PersistentEffectEvent>(events.Count);
+        foreach (PersistentEffectEvent evt in events)
+        {
+            string? group = UtilityEffectClassifier.ExtractAbilityGroupKey(evt.ClassPath);
+            string? name = UtilityEffectClassifier.ClassNameSegment(evt.ClassPath);
+            bool isZoneActor = name is not null && name.Contains("Zone", StringComparison.OrdinalIgnoreCase);
+            if (group is not null && groupsWithZone.Contains(group) && !isZoneActor)
+            {
+                continue; // a sibling Zone actor exists for this exact ability -- prefer it.
+            }
+            filtered.Add(evt);
+        }
+        return filtered;
     }
 }

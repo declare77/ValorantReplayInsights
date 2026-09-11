@@ -370,31 +370,40 @@ string, not three separate fields. `AbilityCastBuilder` now matches members by n
 (tolerating the suffix) and parses that string directly — see its own doc comment, and
 `AbilityCastBuilderTests.cs` for tests built from the real field names/values above.
 
-**Known broken, still under investigation:** smoke/molly/grenade/etc. markers in the viewer
-(`utility.json`, `UtilityTimelineBuilder`) mostly land at the casting player's spawn point instead
-of the real effect location. The likely cause: `UtilityTimelineBuilder` positions a marker using
-`actors.parquet`'s `spawn_x`/`spawn_y` — a one-time snapshot of where that actor's game object was
-when its network channel first opened — which is exactly the thing vrfkit's own docs warn isn't
-the same as a cast's real location (see `AbilityCastBuilder`'s remarks: `AbilityCastsThisRound` is
-called out as the one signal that attributes a real cast location, "rather than only observing a
-caster-side actor spawn"). If a given ability's effect actor is either reused across the whole
-match (equipped once near round start) or spawned once at the moment of throw (so its recorded
-position is the launch point, not the landing spot), you'd see exactly this symptom.
-
-`dump-classes` against a real export confirms this is at least partly right, and sharpens it: a
-single smoke cast spawns **three** separately-classified actors, all of which
-`UtilityEffectClassifier` currently matches as `"Smoke"` and (per the code above) each gets its own
+**Also fixed, and confirmed against a real export rather than guessed:** smoke/molly/grenade/etc.
+markers in the viewer (`utility.json`, `UtilityTimelineBuilder`) used to mostly land at the casting
+player's spawn point instead of the real effect location. `dump-classes` against a real export
+showed why: a single smoke cast spawns **three** separately-classified actors, all of which
+`UtilityEffectClassifier` matches as `"Smoke"` and (before this fix) each got its own
 `PersistentEffectEvent` marker — e.g. for Omen's smoke (class paths use the codename `Wraith` — see
 "Agent codenames" below), `Ability_Wraith_4_Smoke`, `Projectile_Wraith_4_Smoke`, and
 `Zone_Wraith_4_Smoke`; for Jett's Cloudburst (codename `Wushu`), `Ability_Wushu_4_Smoke`,
-`Projectile_Wushu_4_Smoke`, and `GameObject_Wushu_4_SmokeZone`. The `Zone`/`SmokeZone` actor is the
-most likely candidate for the true landing position (an `Ability_` actor plausibly tracks the
-caster, a `Projectile_` actor the in-flight trajectory) — but that's still a guess, not confirmed.
-Not fixed yet because it needs real evidence first: run `dump-actors --class <one of the three
-names above>` against a real export and compare the three actors' open/close timing and recorded
-spawn position side by side. That'll show whether one of them (the `Zone`/`SmokeZone` one, if the
-guess above is right) tracks the real deploy location while the other two don't — and whether
-`UtilityTimelineBuilder` needs to change to emit only one marker per cast instead of one per actor.
+`Projectile_Wushu_4_Smoke`, and `GameObject_Wushu_4_SmokeZone`.
+
+`dump-actors --class <each of those names>` against a real export (Omen's and Jett's smoke, both
+run side by side) confirmed exactly what those three actors are: `Ability_*` opens once per player
+at ~match start (`t≈72ms`) at that player's spawn position and never reopens — it's a per-player
+ability-slot container, not a placement, and its always-near-spawn position is exactly the
+reported bug. `Projectile_*` opens per-cast and closes quickly after (the in-flight grenade's
+travel time — often well under a second). `Zone_*`/`*Zone` opens slightly after the projectile and
+stays open for the ability's real on-field duration (tens of seconds) at a different, correct
+landing position.
+
+`UtilityTimelineBuilder` now (1) excludes `Ability_*` container actors entirely
+(`UtilityEffectClassifier.IsAbilityContainerActor`) and (2), per ability — grouped by agent + slot
+via `UtilityEffectClassifier.ExtractAbilityGroupKey`, so this can't bleed across unrelated
+abilities that happen to share a category — prefers a `Zone`-named actor's position over a sibling
+`Projectile`-named one when both exist for that same ability
+(`UtilityTimelineBuilder.PreferZoneOverNonZoneSiblings`). Abilities with no separate Zone actor
+(most non-smoke utility, going by `dump-classes`) are unaffected. See
+`UtilityEffectClassifierTests.cs` and `UtilityTimelineBuilderTests.cs` for tests built from the
+real class paths/timings above — including one confirming a Zone actor for one ability doesn't
+suppress an unrelated Projectile actor for another.
+
+This was confirmed for smoke specifically (Omen, Jett) — it has not been separately verified for
+molly/wall/trap/etc., though the `Ability_*`-exclusion is a general, structural fix (that actor
+type is a per-player container for every ability tree seen in `dump-classes`, not just smoke) and
+should help across the board even where a Zone-preference doesn't apply.
 
 What's a documented **assumption**, flagged in code comments, and worth checking with
 `dump-fields`/`dump-values`/`dump-classes`/`dump-actors` against your own export before trusting:
