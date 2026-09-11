@@ -137,23 +137,31 @@ const mapOrientation = { rotate: 0, flipH: false, scale: 1, offsetX: 0, offsetY:
 
 function orientationStorageKey(mapUuid) { return 'vrf-map-orientation:' + mapUuid; }
 
-// Known-good starting orientations, worked out once by comparing a replay's positions against a
-// real in-game screenshot with known player locations, so nobody has to rediscover them per map.
-// This is OUR OWN empirical finding, not part of Riot's published data -- it doesn't come from
-// (and isn't overwritten by) Fetch-Assets.ps1. If a map isn't listed here, the manual sliders
-// below still work exactly as before; add an entry once a map's correct rotate/flip is confirmed
-// (see README's map-orientation section for how to verify one).
+// Known-good FULL orientations (rotate, flip, AND scale/pan) hand-dialed-in once by a person using
+// the manual sliders until positions matched real play, so nobody has to rediscover them per map --
+// and so they're a fixed constant rather than something dependent on this browser's own
+// localStorage or a given replay's own recorded footprint (which is what the automatic-calibration
+// paths below produce instead). This is OUR OWN empirical finding, not part of Riot's published
+// data -- it doesn't come from (and isn't overwritten by) Fetch-Assets.ps1. If a map isn't listed
+// here, the manual sliders and/or automatic calibration below still work exactly as before; add an
+// entry once a map's correct rotate/flip/scale/pan is confirmed by hand (see README's
+// map-orientation section for how).
 const KNOWN_MAP_ORIENTATIONS = {
-  // Sunset -- confirmed twice: matches a player's own room-by-room read of a live match, and
-  // separately matches 8 of 10 real player positions from a screenshot to within a few % of the
-  // map (see README). The remaining two were players sprinting at that exact instant, not a
-  // problem with the rotation itself.
-  '92584fbe-486a-b1b2-9faa-39b0f486b498': { rotate: 90, flipH: true },
+  // Sunset -- rotate/flip confirmed twice (matches a player's own room-by-room read of a live
+  // match, and separately matches 8 of 10 real player positions from a screenshot to within a few
+  // % of the map -- the remaining two were players sprinting at that exact instant, not a problem
+  // with the rotation itself; see README), scale/pan later fine-tuned by hand on top of that.
+  '92584fbe-486a-b1b2-9faa-39b0f486b498': { rotate: 90, flipH: true, scale: 1.01, offsetX: 0.01, offsetY: 0.02 },
+  // Ascent -- rotate/flip originally confirmed from a real match's own calibration scores (64%,
+  // a clear ~16-point margin over every alternative -- see CONFIRMED_ORIENTATIONS's doc comment
+  // for why that's confirmation despite not being a clean majority), scale/pan then hand-dialed on
+  // top of that until positions matched real play.
+  '7eaecc1b-4337-bbf6-6ab9-04b8f06b3319': { rotate: 90, flipH: true, scale: 0.96, offsetX: 0.369, offsetY: 0.385 },
 };
 
 function defaultOrientation(mapUuid) {
   const known = mapUuid && KNOWN_MAP_ORIENTATIONS[mapUuid];
-  if (known) return { rotate: known.rotate, flipH: known.flipH, scale: 1, offsetX: 0, offsetY: 0 };
+  if (known) return { rotate: known.rotate, flipH: known.flipH, scale: known.scale, offsetX: known.offsetX, offsetY: known.offsetY };
   // Falls back to whatever this session's own automatic calibration (below) worked out, if
   // anything -- so "Reset map fit" and a fresh page load both land on the computed value instead
   // of blank 0/no-flip once one's been found.
@@ -243,28 +251,27 @@ const AUTO_ORIENTATION_MIN_VOID_FRACTION = 0.02; // image must have at least thi
 const AUTO_ORIENTATION_TRIM = 0.01; // trim the extreme 1% of points on each side per axis before measuring the footprint's extent, so a handful of rare stray/glitched samples can't blow up the fit
 const AUTO_ORIENTATION_TARGET_HALF_EXTENT = 0.46; // fit the footprint to +/-46% from center (an ~8% margin so it doesn't touch the image edge exactly)
 
-// Rotations CONFIRMED from a real match's own calibration scores (not a visual guess) -- when a
-// map is listed here, autoDetectOrientation skips picking a winner by score among the 8 candidates
-// and instead fits scale/offset directly for this pinned (rotate, flipH) pair, using the exact same
-// per-candidate fit + opacity scoring as every other candidate (so it's still a real, data-driven
-// fit, just for a rotation that's already settled rather than re-decided every time).
+// Rotations CONFIRMED from a real match's own calibration scores (not a visual guess), for a map
+// where the rotation is settled but scale/pan should still be fit fresh per replay rather than
+// hand-fixed -- when a map is listed here, autoDetectOrientation skips picking a winner by score
+// among the 8 candidates and instead fits scale/offset directly for this pinned (rotate, flipH)
+// pair, using the exact same per-candidate fit + opacity scoring as every other candidate (so it's
+// still a real, data-driven fit, just for a rotation that's already settled rather than re-decided
+// every time). Compare this to KNOWN_MAP_ORIENTATIONS above, which pins scale/pan too, for a map
+// where those have ALSO been hand-dialed-in and found to work well as fixed constants.
 //
 // Why this table needs to exist at all, rather than just trusting AUTO_ORIENTATION_MIN_SCORE/_LEAD
 // every time: real official Valorant minimap art has plenty of transparent VOID *inside* its outer
 // silhouette too -- walls, out-of-bounds interior gaps -- not just the four corners this feature's
 // whole approach is built on. A correct rotation can legitimately still only land some fraction of
 // real recorded positions on an opaque pixel, well under what a clean synthetic test would suggest.
-// Ascent is the confirmed case so far: a real 24-round, 10-player match scored rotate=90+flip at
-// 64% -- clearly, consistently ahead of every other candidate (next-best 51%, down to 33% for the
-// worst) -- but 64% alone doesn't clear AUTO_ORIENTATION_MIN_SCORE (0.75). Rather than loosen that
-// bar for every map (risking a false-confident pick on a map with no real data backing it), this
-// pins the specific, already-demonstrated-clear answer for maps that have one.
-const CONFIRMED_ORIENTATIONS = {
-  // Ascent -- confirmed via the Debug info panel's own "Automatic orientation calibration" scores
-  // from a real match (see the doc comment above): rotate=90, flipH=true at 64%, a wide margin over
-  // every alternative. See the README's map-orientation section.
-  '7eaecc1b-4337-bbf6-6ab9-04b8f06b3319': { rotate: 90, flipH: true },
-};
+// Ascent was the confirmed case that motivated this table (a real 24-round, 10-player match scored
+// rotate=90+flip at 64% -- clearly, consistently ahead of every other candidate, next-best 51%,
+// down to 33% for the worst -- but 64% alone doesn't clear AUTO_ORIENTATION_MIN_SCORE of 0.75), and
+// has since moved to KNOWN_MAP_ORIENTATIONS once its scale/pan were also hand-confirmed. Empty for
+// now -- add an entry here for a map whose rotation alone is confirmed this way, before its
+// scale/pan has been separately dialed in and fixed.
+const CONFIRMED_ORIENTATIONS = {};
 
 // mapUuid -> { rotate, flipH, score, scores } on success, or { error, scores? } when inconclusive.
 // Session-only (not persisted itself -- a successful result gets persisted like any manual choice
@@ -534,7 +541,7 @@ function maybeAutoDetectOrientation() {
 }
 
 function describeAutoDetection(uuid) {
-  if (KNOWN_MAP_ORIENTATIONS[uuid]) return 'not run -- this map already has a hand-confirmed rotation built in';
+  if (KNOWN_MAP_ORIENTATIONS[uuid]) return 'not run -- this map already has a full hand-confirmed orientation (rotation, scale, and pan) built in';
   let saved = null;
   try { saved = localStorage.getItem(orientationStorageKey(uuid)); } catch { /* ignore */ }
   const result = autoDetectedOrientations[uuid];
