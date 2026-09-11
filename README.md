@@ -247,10 +247,14 @@ What's a documented **assumption**, flagged in code comments, and worth checking
   it replicates on the player's own PlayerState actor rather than a subobject.
 - `UtilityEffectClassifier`'s keyword list is a starting point, not a per-agent catalogue — run
   `dump-classes` on your own export and extend the keyword table with what you actually see.
-- The embedded agent id→name table (`Identity/agents.json`) has 23 confirmed entries fetched from
-  Riot's own public content API (`valorant-api.com`) and is very likely missing a few agents —
-  it degrades to a labeled raw GUID rather than guessing, and is trivially refreshable from the
-  same endpoint.
+- The embedded agent id→name table (`Identity/agents.json`) has 27 confirmed entries fetched from
+  Riot's own public content API (`valorant-api.com`) and is still missing a few (Sage and Yoru,
+  confirmed absent as of this writing) — the bulk agent-list endpoint is large enough that this
+  project's own fetch tooling truncates it before reaching every entry. It degrades to a labeled
+  raw GUID rather than guessing, and if you see `(unrecognized agent id: ...)` in the viewer's
+  roster or its Debug info panel, that GUID can be looked up directly at
+  `https://valorant-api.com/v1/agents/<the-guid>` (a single-agent response is small enough not to
+  get truncated) and added to `agents.json`.
 - `events.characterUltimateUsed` overcounts actual ultimate casts by ~51.5% per vrfkit's own
   measurement (it's the easy signal, not the precise one — see `UltimateUsageBuilder`'s remarks).
 - Map detection (`MapDetector`) is a substring search for a known map's internal asset-path
