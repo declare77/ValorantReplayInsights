@@ -242,15 +242,30 @@ and remembered in your browser (`localStorage`) once set, so you only need to se
 ever, and a **Reset map fit** button puts it back to that map's built-in default (or 0°/no flip if
 it doesn't have one) if you want to start over.
 
-**Maps with a confirmed rotation built in** (`KNOWN_MAP_ORIENTATIONS` in `viewer/app.js`):
+**Maps with a confirmed rotation built in** (`KNOWN_MAP_ORIENTATIONS` in `viewer/app.js`) — this
+one moves where each dot lands, without touching the downloaded picture itself:
 
 | Map | Rotation | Confirmed by |
 |---|---|---|
 | Sunset | 90°, flipped | Matched against a player's own room-by-room read of a live match, then separately checked against 8 of 10 real player positions taken from an in-game screenshot (see below) |
-| Ascent | 90° | Reported by a user (downloaded minimap art was rotated 90° from the position data) — not yet independently cross-checked against a screenshot the way Sunset was, so if agents still land in the wrong rooms after this, try the Scale/Pan sliders next (small crop mismatch, not a rotation problem) |
 
-If you work out a good rotation for another map, add it to that same table in `app.js` (one line)
-so nobody has to rediscover it — see "How to verify a map's rotation" below.
+**Maps where the downloaded picture itself needed rotating** (`MAP_IMAGE_ROTATIONS` in
+`viewer/app.js`) — a different, independent correction for when the minimap art as downloaded is
+just sideways/upside-down, rather than the coordinate formula disagreeing with an otherwise-correct
+picture; this one physically turns the drawn image and leaves dot positions using the plain,
+uncorrected formula:
+
+| Map | Rotation | Confirmed by |
+|---|---|---|
+| Ascent | 90° clockwise | Reported by a user — turning just the dot-position mapping (the mechanism above) didn't fix it, turning the picture itself did. Not yet independently cross-checked against a screenshot with known positions the way Sunset was, so if agents still land in the wrong rooms after this, the fix may need to go the other direction (270°) or use both mechanisms together |
+
+If you work out a good rotation for another map, add it to whichever of the two tables in `app.js`
+actually fixed it (one line) so nobody has to rediscover it — see "How to verify a map's rotation"
+below. If you're not sure which of the two a given map needs, try the dot-position **Map
+orientation** control in the UI first (it's instant, no code change) — if THAT alone lines
+everything up, it belongs in `KNOWN_MAP_ORIENTATIONS`; if the dots land right but the picture
+itself looks sideways (walls/rooms rotated relative to what the dots are doing), it belongs in
+`MAP_IMAGE_ROTATIONS` instead.
 
 If positions are pointed in the right general direction but still look a little off-center —
 clipping into walls that aren't near the real spawn, or drifting slightly away from the correct

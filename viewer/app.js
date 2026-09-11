@@ -149,21 +149,49 @@ const KNOWN_MAP_ORIENTATIONS = {
   // map (see README). The remaining two were players sprinting at that exact instant, not a
   // problem with the rotation itself.
   '92584fbe-486a-b1b2-9faa-39b0f486b498': { rotate: 90, flipH: true },
-
-  // Ascent -- reported by a user: the downloaded minimap image is rotated 90° from the position
-  // data, and turning it 90° clockwise (this project's `rotate: 90`, confirmed clockwise by
-  // tracing applyOrientation's rotation math against toPixel's canvas-space u/v -> x/y mapping)
-  // fixed it. Not yet independently cross-checked against a screenshot with known player
-  // positions the way Sunset above was -- if agents still don't land in the right rooms after
-  // this, the Scale/Pan sliders (a separate, common mismatch -- see the comment above this table)
-  // are the next thing to try, and https://valorant-api.com/v1/maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319
-  // confirms this is in fact Ascent's uuid.
-  '7eaecc1b-4337-bbf6-6ab9-04b8f06b3319': { rotate: 90, flipH: false },
 };
 
 function defaultOrientation(mapUuid) {
   const known = mapUuid && KNOWN_MAP_ORIENTATIONS[mapUuid];
   return { rotate: known ? known.rotate : 0, flipH: known ? known.flipH : false, scale: 1, offsetX: 0, offsetY: 0 };
+}
+
+// A *different* correction from KNOWN_MAP_ORIENTATIONS above. That table nudges where each
+// player/utility DOT lands, while leaving the downloaded minimap picture itself drawn exactly as
+// downloaded -- the right fix when the position-data formula and the image disagree about
+// orientation, but the image's own content is otherwise fine. This table instead physically spins
+// the drawn picture itself (see drawMapImage below), for the case where the picture as downloaded
+// is just sideways/upside-down -- dots keep using the unmodified position formula and only the art
+// underneath them turns. The two are independent and can be combined if a map genuinely needs
+// both, but start with only one and see if that alone lines everything up.
+const MAP_IMAGE_ROTATIONS = {
+  // Ascent -- reported by a user: the downloaded minimap picture itself appeared rotated (not the
+  // dot positions -- turning just the coordinate mapping, tried first, didn't fix it), and
+  // rotating the picture 90° clockwise was the fix they asked for. Not yet independently
+  // cross-checked against a screenshot with known player positions the way Sunset was -- if
+  // agents still don't land in the right rooms after this, tell me and we'll try the other
+  // direction (270°) or add KNOWN_MAP_ORIENTATIONS compensation on top instead.
+  // (https://valorant-api.com/v1/maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319 confirms this uuid.)
+  '7eaecc1b-4337-bbf6-6ab9-04b8f06b3319': 90,
+};
+
+/** Draws the current map image, physically rotated per MAP_IMAGE_ROTATIONS if this map has an
+ * entry (clockwise degrees) -- see the comment on that table for how this differs from the
+ * dot-position correction above. Assumes a roughly square source image/canvas, true of every
+ * competitive map's valorant-api.com `displayIcon` seen so far, so rotating 90°/270° around the
+ * center still fills the canvas edge-to-edge without needing to swap width/height. */
+function drawMapImage(w, h) {
+  if (!state.mapImage) return;
+  const rotateDeg = (state.map && MAP_IMAGE_ROTATIONS[state.map.uuid]) || 0;
+  if (((rotateDeg % 360) + 360) % 360 === 0) {
+    ctx.drawImage(state.mapImage, 0, 0, w, h);
+    return;
+  }
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.rotate(rotateDeg * Math.PI / 180); // canvas rotate() is clockwise for a positive angle
+  ctx.drawImage(state.mapImage, -w / 2, -h / 2, w, h);
+  ctx.restore();
 }
 
 function loadMapOrientation(mapUuid) {
@@ -836,6 +864,8 @@ function logSpawnDebugInfo() {
   lines.push('Map orientation control: rotate=' + mapOrientation.rotate + '  flipH=' + mapOrientation.flipH +
     '  scale=' + mapOrientation.scale + '  offsetX=' + mapOrientation.offsetX + '  offsetY=' + mapOrientation.offsetY +
     (KNOWN_MAP_ORIENTATIONS[state.map.uuid] ? '  (built-in default for this map)' : ''));
+  lines.push('Map image rotation (separate from the above -- turns the picture itself, not the dots): ' +
+    ((state.map && MAP_IMAGE_ROTATIONS[state.map.uuid]) || 0) + '°');
   const hasSides = (state.match.Sides || []).length > 0;
   lines.push('Team sides: ' + (hasSides
     ? 'resolved (' + state.match.Sides.length + ' round(s) -- spike-carrier + spawn-cluster method, see README)'
@@ -1112,7 +1142,7 @@ function render() {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, w, h);
 
-  if (state.mapImage) ctx.drawImage(state.mapImage, 0, 0, w, h);
+  drawMapImage(w, h);
   if (!state.map) return;
 
   drawUtility(w, h);
