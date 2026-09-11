@@ -401,6 +401,9 @@ const calibratePointsBody = document.getElementById('calibratePointsBody');
 const btnCalibrateCompute = document.getElementById('btnCalibrateCompute');
 const btnCalibrateClear = document.getElementById('btnCalibrateClear');
 const calibrateResult = document.getElementById('calibrateResult');
+const calibrateImportText = document.getElementById('calibrateImportText');
+const btnCalibrateImport = document.getElementById('btnCalibrateImport');
+const calibrateImportStatus = document.getElementById('calibrateImportStatus');
 
 // ---------------------------------------------------------------------------
 // Map calibration (DOM-dependent part -- state/math live earlier, near toPixel)
@@ -563,6 +566,33 @@ btnCalibrateClear.addEventListener('click', () => {
   renderCalibratePointsTable();
   updateFitModeStatus();
   calibrateResult.textContent = 'Calibration cleared -- back to the manual sliders above.';
+});
+
+btnCalibrateImport.addEventListener('click', () => {
+  let parsed;
+  try {
+    parsed = JSON.parse(calibrateImportText.value);
+  } catch (err) {
+    calibrateImportStatus.textContent = "Couldn't parse that as JSON: " + err.message;
+    return;
+  }
+  if (!Array.isArray(parsed)) {
+    calibrateImportStatus.textContent = 'Expected a JSON array of points.';
+    return;
+  }
+  const required = ['player', 'timeMs', 'x', 'y', 'u', 'v'];
+  const bad = parsed.find((p) => !p || typeof p !== 'object' ||
+    required.some((k) => typeof p[k] !== 'number' && k !== 'player') ||
+    typeof p.player !== 'string');
+  if (bad) {
+    calibrateImportStatus.textContent = 'Every point needs player (text), timeMs, x, y, u, v (numbers). Found one that doesn\'t match.';
+    return;
+  }
+  calibrationPoints.push(...parsed);
+  renderCalibratePointsTable();
+  calibrateImportStatus.textContent = 'Added ' + parsed.length + ' point(s) -- ' +
+    calibrationPoints.length + ' total. Click "Compute & save fit" above to use them.';
+  calibrateImportText.value = '';
 });
 
 // ---------------------------------------------------------------------------

@@ -250,6 +250,29 @@ footer {
 #calibratePointsTable button:hover { color: var(--text); }
 #calibrateActions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 #mapCanvas.calibrating { cursor: crosshair; }
+#calibrateImportPanel { margin-top: 10px; border-top: 1px solid var(--panel-border); padding-top: 8px; }
+#calibrateImportPanel summary { cursor: pointer; }
+#calibrateImportText {
+  width: 100%;
+  margin: 6px 0;
+  background: #0d1218;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 8px;
+}
+#btnCalibrateImport {
+  background: #1c2530;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+#btnCalibrateImport:hover { background: #26313f; }
+#calibrateImportStatus { margin-left: 8px; }
 #debugText {
   width: 100%;
   margin-top: 8px;

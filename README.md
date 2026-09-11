@@ -207,6 +207,13 @@ so once it's saved for a map it's automatically used for every future replay on 
 the manual sliders are ignored whenever a calibrated fit exists, and a **Clear calibration** button
 reverts to them if you ever want to start over.
 
+If someone worked out calibration points for you some other way (e.g. from a screenshot with known
+player positions, matched up against a replay's `movement.json`), you don't have to re-click them
+one by one: open **Or paste in points someone worked out for you** under the calibrate panel, paste
+in a JSON array of `{player, timeMs, x, y, u, v}` objects, click **Add these points to the table**,
+then **Compute & save fit** as usual. It's just a shortcut into the same table the manual clicks
+fill in — same residual checks, same 4-point minimum, nothing skipped.
+
 If you're not sure the transform itself is right (positions clipping into walls, or way off the
 map entirely), open the **Debug info** panel below the roster after loading a match — it lists
 every player's first recorded position and the exact normalized coordinate the map transform
