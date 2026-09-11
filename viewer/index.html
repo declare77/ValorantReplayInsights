@@ -54,6 +54,15 @@
   <aside id="roster"></aside>
 </main>
 
+<details id="debugPanel" hidden>
+  <summary>Debug info (for troubleshooting positions on the map)</summary>
+  <p class="hint">If something looks off, copy the text below and send it back — no need to dig
+  through the browser console for this.</p>
+  <textarea id="debugText" readonly rows="10"></textarea>
+  <button id="btnCopyDebug">Copy debug info</button>
+  <span id="copyDebugStatus"></span>
+</details>
+
 <footer id="controls" hidden>
   <div id="chapters"></div>
   <input type="range" id="scrubber" min="0" max="1000" value="0" step="10">

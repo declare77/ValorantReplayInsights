@@ -193,6 +193,39 @@ footer {
 #roundLabel { color: var(--text-dim); min-width: 70px; }
 .check { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 13px; }
 
+#debugPanel {
+  margin: 0 16px 16px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+#debugPanel summary { cursor: pointer; color: var(--text); }
+#debugText {
+  width: 100%;
+  margin-top: 8px;
+  background: #0d1218;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 8px;
+}
+#btnCopyDebug {
+  margin-top: 6px;
+  background: #1c2530;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+#btnCopyDebug:hover { background: #26313f; }
+#copyDebugStatus { margin-left: 8px; color: var(--text-dim); }
+
 @media (max-width: 760px) {
   main { flex-direction: column; }
   #roster { flex: 1 1 auto; width: 100%; max-height: 200px; }

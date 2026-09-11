@@ -174,6 +174,12 @@ to correct it by eye — try each rotation until the two teams land on the corre
 per-map and remembered in your browser (`localStorage`) once set, so you only need to set it once
 per map, ever.
 
+If you're not sure the transform itself is right (positions clipping into walls, or way off the
+map entirely), open the **Debug info** panel below the roster after loading a match — it lists
+every player's first recorded position and the exact normalized coordinate the map transform
+computes from it, with a "Copy debug info" button so you can hand that straight to whoever's
+troubleshooting it, no developer tools required.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,

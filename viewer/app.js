@@ -249,6 +249,10 @@ const visionToggle = document.getElementById('visionToggle');
 const facingOffsetInput = document.getElementById('facingOffset');
 const mapRotateSelect = document.getElementById('mapRotate');
 const mapFlipCheckbox = document.getElementById('mapFlip');
+const debugPanel = document.getElementById('debugPanel');
+const debugText = document.getElementById('debugText');
+const btnCopyDebug = document.getElementById('btnCopyDebug');
+const copyDebugStatus = document.getElementById('copyDebugStatus');
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -382,6 +386,7 @@ function resolveMap() {
     state.map = chosen ? normalizeMapInfo(chosen) : null;
     applyLoadedOrientation();
     loadMapImage();
+    logSpawnDebugInfo();
   };
 
   applyLoadedOrientation();
@@ -400,10 +405,12 @@ function applyLoadedOrientation() {
 mapRotateSelect.addEventListener('change', () => {
   mapOrientation.rotate = Number(mapRotateSelect.value) || 0;
   saveMapOrientation(state.map && state.map.uuid);
+  if (state.tracks.length > 0) logSpawnDebugInfo();
 });
 mapFlipCheckbox.addEventListener('change', () => {
   mapOrientation.flipH = mapFlipCheckbox.checked;
   saveMapOrientation(state.map && state.map.uuid);
+  if (state.tracks.length > 0) logSpawnDebugInfo();
 });
 
 function loadMapImage() {
@@ -438,19 +445,21 @@ function showMapOverlay(text) { mapOverlay.textContent = text; mapOverlay.hidden
 function hideMapOverlay() { mapOverlay.hidden = true; }
 
 /**
- * Diagnostic aid, printed once per load to the browser console (F12 -> Console tab) — not shown
- * on screen. If positions look wrong on the minimap (wrong side, clipped into walls, etc.), this
- * is the first thing to check: for every player's very first recorded sample, it prints the raw
- * world PosX/PosY, the normalized u/v this project's map transform computes from them, and
- * whether that u/v actually lands inside the map image (0..1 on both axes). u/v outside [0,1] at
- * round start is a strong signal of a real transform bug (wrong map detected, wrong multiplier,
- * swapped axes); u/v just barely inside [0,1] near an edge can be entirely correct data that
- * simply looks clipped on screen because player icons are drawn at a fixed pixel radius
- * (AGENT_ICON_RADIUS_PX) regardless of how close the real spawn point is to a wall.
+ * Diagnostic aid, shown on the page itself (a collapsible "Debug info" panel below the roster) --
+ * not just the browser console, so it's copy-pasteable without opening developer tools. If
+ * positions look wrong on the minimap (wrong side, clipped into walls, etc.), this is the first
+ * thing to check: for every player's very first recorded sample, it lists the raw world
+ * PosX/PosY, the normalized u/v this project's map transform computes from them, and whether that
+ * u/v actually lands inside the map image (0..1 on both axes). u/v outside [0,1] at round start is
+ * a strong signal of a real transform bug (wrong map detected, wrong multiplier, swapped axes);
+ * u/v just barely inside [0,1] near an edge can be entirely correct data that simply looks clipped
+ * on screen because player icons are drawn at a fixed pixel radius (AGENT_ICON_RADIUS_PX)
+ * regardless of how close the real spawn point is to a wall.
  */
 function logSpawnDebugInfo() {
   if (!state.map) {
-    console.log('[vrf-viewer] No map resolved yet -- spawn debug info will print once you pick a map above.');
+    debugText.value = 'No map resolved yet -- pick one from the dropdown above, then reopen this panel.';
+    debugPanel.hidden = false;
     return;
   }
 
@@ -460,22 +469,45 @@ function logSpawnDebugInfo() {
     const uv = worldToUv(sample.PosX, sample.PosY, state.map);
     return {
       player: (track.Player && (track.Player.AgentName || playerKey(track.Player))) || '(unknown)',
-      PosX: sample.PosX,
-      PosY: sample.PosY,
+      PosX: Number(sample.PosX.toFixed(1)),
+      PosY: Number(sample.PosY.toFixed(1)),
       u: Number(uv.u.toFixed(4)),
       v: Number(uv.v.toFixed(4)),
       insideImage: uv.u >= 0 && uv.u <= 1 && uv.v >= 0 && uv.v <= 1,
     };
   }).filter(Boolean);
 
-  console.log(
-    '[vrf-viewer] Map:', state.map.displayName,
-    ' xMultiplier/yMultiplier/xScalarToAdd/yScalarToAdd:',
-    state.map.xMultiplier, state.map.yMultiplier, state.map.xScalarToAdd, state.map.yScalarToAdd
-  );
-  console.log('[vrf-viewer] Spawn-frame positions (u/v should be within 0..1 -- see comment above logSpawnDebugInfo in app.js):');
-  console.table(rows);
+  const lines = [];
+  lines.push('Map: ' + state.map.displayName);
+  lines.push('xMultiplier=' + state.map.xMultiplier + '  yMultiplier=' + state.map.yMultiplier +
+    '  xScalarToAdd=' + state.map.xScalarToAdd + '  yScalarToAdd=' + state.map.yScalarToAdd);
+  lines.push('Map orientation control: rotate=' + mapOrientation.rotate + '  flipH=' + mapOrientation.flipH);
+  lines.push('');
+  lines.push('Spawn-frame positions (u/v should be within 0..1 to land on the map image):');
+  lines.push(['player', 'PosX', 'PosY', 'u', 'v', 'insideImage'].join('\t'));
+  for (const r of rows) {
+    lines.push([r.player, r.PosX, r.PosY, r.u, r.v, r.insideImage].join('\t'));
+  }
+
+  debugText.value = lines.join('\n');
+  debugPanel.hidden = false;
 }
+
+btnCopyDebug.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(debugText.value);
+    copyDebugStatus.textContent = 'Copied!';
+  } catch {
+    debugText.select();
+    try {
+      document.execCommand('copy');
+      copyDebugStatus.textContent = 'Copied!';
+    } catch {
+      copyDebugStatus.textContent = 'Could not auto-copy -- text is selected, press Ctrl+C.';
+    }
+  }
+  setTimeout(() => { copyDebugStatus.textContent = ''; }, 3000);
+});
 
 // ---------------------------------------------------------------------------
 // Roster / chapters
