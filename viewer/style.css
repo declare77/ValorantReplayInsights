@@ -201,7 +201,7 @@ footer {
   color: var(--text);
 }
 
-#debugPanel {
+#calibratePanel, #debugPanel {
   margin: 0 16px 16px;
   background: var(--panel);
   border: 1px solid var(--panel-border);
@@ -210,7 +210,46 @@ footer {
   color: var(--text-dim);
   font-size: 13px;
 }
-#debugPanel summary { cursor: pointer; color: var(--text); }
+#calibratePanel summary, #debugPanel summary { cursor: pointer; color: var(--text); }
+#calibratePanel ol.hint { margin: 6px 0; padding-left: 20px; }
+#calibrateControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+#calibrateControls select, #calibrateControls button,
+#calibrateActions button {
+  background: #1c2530;
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+#calibrateControls button:hover, #calibrateActions button:hover { background: #26313f; }
+#btnCalibratePick.armed { background: var(--accent); color: #04121f; }
+#calibratePointsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 8px 0;
+}
+#calibratePointsTable th, #calibratePointsTable td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+#calibratePointsTable button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+#calibratePointsTable button:hover { color: var(--text); }
+#calibrateActions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#mapCanvas.calibrating { cursor: crosshair; }
 #debugText {
   width: 100%;
   margin-top: 8px;

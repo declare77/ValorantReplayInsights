@@ -54,6 +54,37 @@
   <aside id="roster"></aside>
 </main>
 
+<details id="calibratePanel" hidden>
+  <summary>Calibrate map fit (do this once per map, then forget about the sliders)</summary>
+  <p class="hint">
+    Instead of guessing slider values, click a few spots on the map where you can positively
+    identify a player's real location (a doorway, a plant spot, a corner you recognize) and this
+    works out the correct fit itself. It's saved per map, so once it's right here it'll be right
+    for every future replay on the same map too — no need to redo it.
+  </p>
+  <ol class="hint">
+    <li>Pause at a moment where you know exactly where a player is standing.</li>
+    <li>Pick that player below, then click <strong>Pick location</strong> and click that spot on the map.</li>
+    <li>Repeat for at least 3 points — spread out across the map, not clustered together — then click <strong>Compute &amp; save fit</strong>.</li>
+  </ol>
+  <div id="calibrateControls">
+    <label>Player:
+      <select id="calibratePlayerSelect"></select>
+    </label>
+    <button id="btnCalibratePick" type="button">Pick location on map</button>
+    <span id="calibrateStatus" class="hint"></span>
+  </div>
+  <table id="calibratePointsTable">
+    <thead><tr><th>Player</th><th>Time</th><th>World X</th><th>World Y</th><th>Clicked at</th><th></th></tr></thead>
+    <tbody id="calibratePointsBody"></tbody>
+  </table>
+  <div id="calibrateActions">
+    <button id="btnCalibrateCompute" type="button">Compute &amp; save fit</button>
+    <button id="btnCalibrateClear" type="button">Clear calibration</button>
+    <span id="calibrateResult" class="hint"></span>
+  </div>
+</details>
+
 <details id="debugPanel" hidden>
   <summary>Debug info (for troubleshooting positions on the map)</summary>
   <p class="hint">If something looks off, copy the text below and send it back — no need to dig
@@ -113,6 +144,7 @@
       <span class="sliderValue" id="mapOffsetYValue">0%</span>
     </label>
     <button id="btnResetOrientation" type="button" title="Reset orientation/scale/pan for this map back to defaults">Reset map fit</button>
+    <span id="fitModeStatus" class="hint"></span>
   </div>
 </footer>
 

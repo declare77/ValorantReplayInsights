@@ -184,6 +184,19 @@ X%/Y%** controls next to Map orientation compensate for that — Scale zooms in/
 center, the two Pan fields shift it — also remembered per map, with a **Reset** button to get back
 to defaults (0° rotation, no flip, scale 1, no pan) if you want to start over.
 
+**Or skip the sliders entirely and calibrate it once.** Rotate/flip/scale/pan means trial and
+error, and you'd have to redo it if it's ever slightly off. The **Calibrate map fit** panel (below
+the roster, next to Debug info) does it properly instead: pause on a moment where you know exactly
+where a player is standing, pick that player, click **Pick location**, then click that exact spot
+on the map. Do that for at least 3 points spread across different areas of the map (not clustered
+together — the more spread out, the more accurate the fit), then click **Compute & save fit**. It
+works out the correct transform from those correspondences by least squares and tells you the
+worst point's error as a percentage of the map, so you know how good the fit is — add more points
+and recompute if that number looks too high. This is a property of the map (its image and Riot's
+coordinate data for it), not of any one replay, so once it's saved for a map it's automatically
+used for every future replay on that same map too — the manual sliders are ignored whenever a
+calibrated fit exists, and a **Clear calibration** button reverts to them if you ever want to.
+
 If you're not sure the transform itself is right (positions clipping into walls, or way off the
 map entirely), open the **Debug info** panel below the roster after loading a match — it lists
 every player's first recorded position and the exact normalized coordinate the map transform

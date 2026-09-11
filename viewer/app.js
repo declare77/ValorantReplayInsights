@@ -117,14 +117,226 @@ function applyOrientation(u, v) {
   return { u: x + 0.5, v: y + 0.5 };
 }
 
-/** World units -> screen pixels, applying both the map's own transform and the (usually
- * identity) orientation correction above. Every drawing function should go through this rather
- * than calling worldToUv directly, so the orientation control affects everything consistently. */
-function toPixel(x, y, w, h) {
-  const uv = worldToUv(x, y, state.map);
-  const oriented = applyOrientation(uv.u, uv.v);
-  return { x: oriented.u * w, y: oriented.v * h };
+// Map calibration --------------------------------------------------------------------------
+// An alternative to guessing rotate/flip/scale/pan by hand: click a few spots on the map where
+// you can positively identify a player's real location, and fit a general affine transform
+// (world x,y -> normalized u,v) directly from those correspondences via least squares. This is
+// strictly more capable than the manual sliders above (it also corrects shear/non-uniform
+// scaling, which rotate+scale+pan can't) and, being a property of the map image/data pairing
+// rather than any one replay, only has to be done once per map -- saved per map in localStorage,
+// same as the manual controls, and takes priority over them in toPixel() whenever present.
+let mapCalibration = null;       // { A,B,C,D,E,F, points: [...] } for the current map, or null
+let calibrationPoints = [];      // points collected in the current (possibly not-yet-saved) session
+let calibratePicking = false;    // true while armed, waiting for the next canvas click
+
+function calibrationStorageKey(mapUuid) { return 'vrf-map-calibration:' + mapUuid; }
+
+function loadMapCalibration(mapUuid) {
+  if (!mapUuid) return null;
+  try {
+    const raw = localStorage.getItem(calibrationStorageKey(mapUuid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.A !== 'number' || !Array.isArray(parsed.points)) return null;
+    return parsed;
+  } catch { return null; }
 }
+
+function saveMapCalibration(mapUuid, calibration) {
+  if (!mapUuid) return;
+  try { localStorage.setItem(calibrationStorageKey(mapUuid), JSON.stringify(calibration)); }
+  catch { /* private-mode / storage disabled -- calibration just won't be remembered next time */ }
+}
+
+function clearMapCalibrationStorage(mapUuid) {
+  if (!mapUuid) return;
+  try { localStorage.removeItem(calibrationStorageKey(mapUuid)); } catch { /* ignore */ }
+}
+
+function det3(m) {
+  return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+       - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+       + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+}
+
+/** Solves the 3x3 linear system M*p = b via Cramer's rule. Returns null if M is singular (e.g.
+ * every point fed to solveAffine lies on the same line, or all points are the same). */
+function solve3x3(M, b) {
+  const det = det3(M);
+  if (Math.abs(det) < 1e-9) return null;
+  const withCol = (col) => M.map((row, i) => row.map((v, j) => (j === col ? b[i] : v)));
+  return [det3(withCol(0)) / det, det3(withCol(1)) / det, det3(withCol(2)) / det];
+}
+
+/** Least-squares fit of world (x,y) -> normalized (u,v) as an affine transform
+ * (u = A*x + B*y + C, v = D*x + E*y + F) from >=3 point correspondences. Returns null if the
+ * points are degenerate (collinear, or fewer than 3 distinct locations). */
+function solveAffine(points) {
+  if (points.length < 3) return null;
+  let Sxx = 0, Sxy = 0, Sx = 0, Syy = 0, Sy = 0;
+  let Sxu = 0, Syu = 0, Su = 0, Sxv = 0, Syv = 0, Sv = 0;
+  for (const p of points) {
+    Sxx += p.x * p.x; Sxy += p.x * p.y; Sx += p.x;
+    Syy += p.y * p.y; Sy += p.y;
+    Sxu += p.x * p.u; Syu += p.y * p.u; Su += p.u;
+    Sxv += p.x * p.v; Syv += p.y * p.v; Sv += p.v;
+  }
+  const n = points.length;
+  const M = [[Sxx, Sxy, Sx], [Sxy, Syy, Sy], [Sx, Sy, n]];
+  const abc = solve3x3(M, [Sxu, Syu, Su]);
+  const def = solve3x3(M, [Sxv, Syv, Sv]);
+  if (!abc || !def) return null;
+  return { A: abc[0], B: abc[1], C: abc[2], D: def[0], E: def[1], F: def[2] };
+}
+
+/** World units -> screen pixels. Uses the calibrated fit above when one exists for the current
+ * map; otherwise falls back to Riot's own formula plus the manual orientation correction. Every
+ * drawing function should go through this rather than calling worldToUv directly. */
+function toPixel(x, y, w, h) {
+  let u, v;
+  if (mapCalibration) {
+    u = mapCalibration.A * x + mapCalibration.B * y + mapCalibration.C;
+    v = mapCalibration.D * x + mapCalibration.E * y + mapCalibration.F;
+  } else {
+    const uv = worldToUv(x, y, state.map);
+    const oriented = applyOrientation(uv.u, uv.v);
+    u = oriented.u; v = oriented.v;
+  }
+  return { x: u * w, y: v * h };
+}
+
+function updateFitModeStatus() {
+  fitModeStatus.textContent = mapCalibration
+    ? 'Using: calibrated fit (' + mapCalibration.points.length + ' point(s)) -- sliders above are ignored'
+    : 'Using: manual sliders above';
+}
+
+/** Reloads calibration state for whichever map is now current -- call whenever state.map
+ * changes (initial resolve, or the map dropdown override). */
+function refreshCalibrationForCurrentMap() {
+  const uuid = state.map && state.map.uuid;
+  mapCalibration = loadMapCalibration(uuid);
+  calibrationPoints = mapCalibration ? mapCalibration.points.slice() : [];
+  renderCalibratePointsTable();
+  updateFitModeStatus();
+}
+
+function buildCalibratePlayerList() {
+  calibratePlayerSelect.innerHTML = '';
+  (state.match.Players || []).forEach((p) => {
+    const opt = document.createElement('option');
+    opt.value = playerKey(p);
+    opt.textContent = p.AgentName || playerKey(p);
+    calibratePlayerSelect.appendChild(opt);
+  });
+}
+
+function renderCalibratePointsTable() {
+  calibratePointsBody.innerHTML = '';
+  calibrationPoints.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    const cells = [
+      p.player,
+      formatClock(p.timeMs),
+      p.x.toFixed(0),
+      p.y.toFixed(0),
+      (p.u * 100).toFixed(1) + '%, ' + (p.v * 100).toFixed(1) + '%',
+    ];
+    for (const text of cells) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    const actionTd = document.createElement('td');
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Remove this point';
+    removeBtn.onclick = () => { calibrationPoints.splice(idx, 1); renderCalibratePointsTable(); };
+    actionTd.appendChild(removeBtn);
+    tr.appendChild(actionTd);
+    calibratePointsBody.appendChild(tr);
+  });
+}
+
+btnCalibratePick.addEventListener('click', () => {
+  if (!calibratePlayerSelect.value) {
+    calibrateStatus.textContent = 'Pick a player first.';
+    return;
+  }
+  calibratePicking = true;
+  btnCalibratePick.classList.add('armed');
+  btnCalibratePick.textContent = 'Click the map now...';
+  canvas.classList.add('calibrating');
+  calibrateStatus.textContent = 'Click the exact spot on the map where that player really is right now.';
+});
+
+canvas.addEventListener('click', (e) => {
+  if (!calibratePicking) return;
+  calibratePicking = false;
+  btnCalibratePick.classList.remove('armed');
+  btnCalibratePick.textContent = 'Pick location on map';
+  canvas.classList.remove('calibrating');
+
+  const key = calibratePlayerSelect.value;
+  const track = state.tracks.find((t) => playerKey(t.Player) === key);
+  const sample = track && interpolateSample(track.Samples, state.currentTimeMs);
+  if (!sample) {
+    calibrateStatus.textContent = "Couldn't find that player's position at the current time -- try again.";
+    return;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+  const px = (e.clientX - rect.left) * scaleX;
+  const py = (e.clientY - rect.top) * scaleY;
+
+  calibrationPoints.push({
+    player: calibratePlayerSelect.options[calibratePlayerSelect.selectedIndex].textContent,
+    timeMs: state.currentTimeMs,
+    x: sample.PosX,
+    y: sample.PosY,
+    u: px / canvas.width,
+    v: py / canvas.height,
+  });
+  renderCalibratePointsTable();
+  calibrateStatus.textContent = calibrationPoints.length + ' point(s) recorded so far.';
+});
+
+btnCalibrateCompute.addEventListener('click', () => {
+  if (calibrationPoints.length < 3) {
+    calibrateResult.textContent = 'Need at least 3 points (spread across different areas of the map) to compute a fit.';
+    return;
+  }
+  const fit = solveAffine(calibrationPoints);
+  if (!fit) {
+    calibrateResult.textContent = "Those points are too close together or in a line to solve -- pick points spread across different, well-separated areas of the map.";
+    return;
+  }
+
+  let worstErrorPct = 0;
+  for (const p of calibrationPoints) {
+    const pu = fit.A * p.x + fit.B * p.y + fit.C;
+    const pv = fit.D * p.x + fit.E * p.y + fit.F;
+    worstErrorPct = Math.max(worstErrorPct, Math.hypot(pu - p.u, pv - p.v) * 100);
+  }
+
+  mapCalibration = Object.assign({}, fit, { points: calibrationPoints.slice() });
+  saveMapCalibration(state.map && state.map.uuid, mapCalibration);
+  updateFitModeStatus();
+  calibrateResult.textContent = 'Saved -- worst point is off by ' + worstErrorPct.toFixed(1) +
+    '% of the map. If that looks too high, add more points (especially anywhere it still looks ' +
+    'off) and compute again -- it recalculates from every point currently in the table.';
+});
+
+btnCalibrateClear.addEventListener('click', () => {
+  mapCalibration = null;
+  calibrationPoints = [];
+  clearMapCalibrationStorage(state.map && state.map.uuid);
+  renderCalibratePointsTable();
+  updateFitModeStatus();
+  calibrateResult.textContent = 'Calibration cleared -- back to the manual sliders above.';
+});
 
 // ---------------------------------------------------------------------------
 // State
@@ -284,6 +496,16 @@ const debugPanel = document.getElementById('debugPanel');
 const debugText = document.getElementById('debugText');
 const btnCopyDebug = document.getElementById('btnCopyDebug');
 const copyDebugStatus = document.getElementById('copyDebugStatus');
+const fitModeStatus = document.getElementById('fitModeStatus');
+
+const calibratePanel = document.getElementById('calibratePanel');
+const calibratePlayerSelect = document.getElementById('calibratePlayerSelect');
+const btnCalibratePick = document.getElementById('btnCalibratePick');
+const calibrateStatus = document.getElementById('calibrateStatus');
+const calibratePointsBody = document.getElementById('calibratePointsBody');
+const btnCalibrateCompute = document.getElementById('btnCalibrateCompute');
+const btnCalibrateClear = document.getElementById('btnCalibrateClear');
+const calibrateResult = document.getElementById('calibrateResult');
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -345,7 +567,11 @@ function initializeFromLoadedData() {
   resolveMap();
   buildRoster();
   buildChapters();
+  buildCalibratePlayerList();
   logSpawnDebugInfo();
+  calibratePanel.hidden = false;
+  calibrateStatus.textContent = '';
+  calibrateResult.textContent = '';
 
   visionToggle.disabled = !state.visionCones;
   visionToggle.checked = false;
@@ -440,6 +666,7 @@ function applyLoadedOrientation() {
   mapScaleValue.textContent = loaded.scale.toFixed(2);
   mapOffsetXValue.textContent = Math.round(loaded.offsetX * 100) + '%';
   mapOffsetYValue.textContent = Math.round(loaded.offsetY * 100) + '%';
+  refreshCalibrationForCurrentMap();
 }
 
 // Sliders update mapOrientation and the on-screen readout live on every drag tick ('input', fires
@@ -560,6 +787,9 @@ function logSpawnDebugInfo() {
     '  xScalarToAdd=' + state.map.xScalarToAdd + '  yScalarToAdd=' + state.map.yScalarToAdd);
   lines.push('Map orientation control: rotate=' + mapOrientation.rotate + '  flipH=' + mapOrientation.flipH +
     '  scale=' + mapOrientation.scale + '  offsetX=' + mapOrientation.offsetX + '  offsetY=' + mapOrientation.offsetY);
+  lines.push(mapCalibration
+    ? 'Calibrated fit ACTIVE (' + mapCalibration.points.length + ' point(s)) -- the orientation control above is being ignored.'
+    : 'No calibrated fit saved for this map -- using the orientation control above.');
   lines.push('');
   lines.push('Spawn-frame positions (u/v should be within 0..1 to land on the map image):');
   lines.push(['player', 'PosX', 'PosY', 'u', 'v', 'insideImage'].join('\t'));
