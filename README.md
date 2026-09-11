@@ -319,6 +319,11 @@ replay. Only 8 of the ~30 listed agents have actually been seen in the sample ex
 was developed against (confirmed via `dump-classes`): Gekko, Chamber, KAY/O, Phoenix, Waylay,
 Reyna, Omen, and Jett.
 
+For real ability names per agent (fetched from Riot's own public `valorant-api.com`, not the
+replay), and an honest accounting of which internal ability *codenames* are actually confirmed
+versus just raw, unmatched `dump-classes` output, see
+[`docs/AGENT_ABILITIES.md`](docs/AGENT_ABILITIES.md).
+
 ## On "vision cones" specifically
 
 VALORANT's replay does not replicate anything called a vision cone. What's real and exact (per
