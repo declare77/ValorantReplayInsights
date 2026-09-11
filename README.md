@@ -63,6 +63,9 @@ dotnet run --project src/VrfInsights.Cli -- run path/to/match.vrf \
     --with-vision
 ```
 
+(Add `--movement-hz 0` if you specifically want full-fidelity movement data instead of the default
+10 samples/sec/player thinning — see the `movement.json` note below.)
+
 This decodes the replay into `./analysis/export/` (override with `--export-dir`) and then writes
 the same analysis JSON described below into `./analysis/`.
 
@@ -88,13 +91,26 @@ already wrote, exactly like Option C does by hand.
 |---|---|
 | `match.json` | Replay build, duration, detected map (see below), resolved player/agent/loadout list, round boundaries |
 | `events.json` | The server's own event timeline (kills, ultimates, spike plant/defuse/explode, round starts), attributed to a round number |
-| `movement.json` | Per-player position/rotation/velocity time series (from `movement.parquet`) |
+| `movement.json` | Per-player position/rotation/velocity time series (from `movement.parquet`), thinned to at most `--movement-hz` samples/sec/player for output (default 10 — see note below) |
 | `vision_cones.json` | *(only with `--with-vision`)* one derived vision cone per movement sample per player |
 | `utility.json` | Smoke/wall/molly/trap/etc. placement events with spawn/despawn time and position |
 | `ability_casts.json` | Ability casts from `Comp_AbilityStatisticsReplicator.AbilityCastsThisRound` (caster, slot, round, location) |
 | `ultimate_usages.json` | Ultimate-cast signal from the server's own event timeline |
 | `combat_interactions.json` | Per-round `CombatReport` interactions (damage, hits, kill/assist, wallbang) |
 | `economy.json` | `MoneyManagementComponent` credit snapshots over time |
+
+**About `movement.json`'s size.** `movement.parquet` replicates at close to the replay's own tick
+rate (observed up to roughly 128 samples/sec per player) — for a full match, writing every sample
+straight to JSON can produce a file hundreds of MB, too large for a browser to load in the 2D
+replay viewer (`FileReader`/`JSON.parse` failing on a huge string surfaces as "Unexpected end of
+JSON input", which looks like a truncated/corrupt file but isn't — the file is valid, just too
+big). So `analyze`/`run` thin `movement.json` (and, with `--with-vision`, `vision_cones.json`) down
+to at most `--movement-hz` samples/sec per player before writing — by minimum time spacing, always
+keeping each player's first and last sample, so positions stay accurate, just less densely sampled.
+Default is 10/sec, which is still smooth once the viewer interpolates between samples. Pass
+`--movement-hz 0` for full, undownsampled fidelity if you specifically need every raw sample (the
+GUI always uses the default of 10). If you already have an old, oversized `movement.json` from
+before this existed, delete it and re-run `analyze`/`run`.
 
 Two diagnostic commands help you verify or extend the assumptions below against your own export:
 

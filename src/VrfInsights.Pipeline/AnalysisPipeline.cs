@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using VrfInsights.Analysis;
 using VrfInsights.Analysis.Identity;
+using VrfInsights.Analysis.Movement;
 using VrfInsights.Analysis.Vision;
 using VrfInsights.Data;
 
@@ -9,11 +10,16 @@ namespace VrfInsights.Pipeline;
 
 /// <summary>Options for <see cref="AnalysisPipeline.RunAsync"/>. Mirrors the CLI's
 /// <c>analyze</c> command flags so both the CLI and the GUI drive the exact same code path.</summary>
+/// <param name="MovementSamplesPerSecond">Caps how many movement samples per second per player
+/// make it into <c>movement.json</c> (and, downstream, <c>vision_cones.json</c>) — see
+/// <see cref="VrfInsights.Analysis.Movement.MovementDownsampler"/> for why this exists. 0 means
+/// full fidelity (can produce a movement.json hundreds of MB for a full match).</param>
 public sealed record AnalysisPipelineOptions(
     double FovDegrees = VisionConeCalculator.DefaultFovDegrees,
     double RangeCm = VisionConeCalculator.DefaultRangeCm,
     double EyeHeightCm = VisionConeCalculator.EyeHeightCm,
-    bool WithVision = false);
+    bool WithVision = false,
+    double MovementSamplesPerSecond = 10);
 
 /// <summary>
 /// The single place that turns a vrfkit export directory into this project's JSON analysis
@@ -29,6 +35,16 @@ public static class AnalysisPipeline
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    // movement.json and vision_cones.json scale with sample count and can get very large (see
+    // MovementDownsampler's remarks) — skip indentation for these two specifically so they stay
+    // as small as the (already-thinned) data allows. Everything else stays indented/readable,
+    // since inspecting them by hand is part of how this project's own assumptions get checked.
+    private static readonly JsonSerializerOptions CompactJsonOptions = new()
+    {
+        WriteIndented = false,
         Converters = { new JsonStringEnumConverter() },
     };
 
@@ -69,7 +85,16 @@ public static class AnalysisPipeline
         });
 
         await WriteJsonAsync(Path.Combine(outputDirectory, "events.json"), analysis.Events);
-        await WriteJsonAsync(Path.Combine(outputDirectory, "movement.json"), analysis.MovementTracks);
+
+        IReadOnlyList<PlayerTrack> tracksForOutput = MovementDownsampler.Downsample(analysis.MovementTracks, options.MovementSamplesPerSecond);
+        if (options.MovementSamplesPerSecond > 0)
+        {
+            int rawTotal = analysis.MovementTracks.Sum(t => t.Samples.Count);
+            int keptTotal = tracksForOutput.Sum(t => t.Samples.Count);
+            onStatus?.Invoke($"Downsampling movement for output to ~{options.MovementSamplesPerSecond:0.#}/sec per player ({rawTotal:N0} -> {keptTotal:N0} samples; use --movement-hz 0 for full fidelity).");
+        }
+        await WriteJsonAsync(Path.Combine(outputDirectory, "movement.json"), tracksForOutput, CompactJsonOptions);
+
         await WriteJsonAsync(Path.Combine(outputDirectory, "utility.json"), analysis.Utility);
         await WriteJsonAsync(Path.Combine(outputDirectory, "ability_casts.json"), analysis.AbilityCasts);
         await WriteJsonAsync(Path.Combine(outputDirectory, "ultimate_usages.json"), analysis.UltimateUsages);
@@ -80,13 +105,13 @@ public static class AnalysisPipeline
         {
             onStatus?.Invoke("Computing vision cones (this can take a while on long replays)...");
             var visionByPlayer = new Dictionary<string, object>();
-            foreach (var track in analysis.MovementTracks)
+            foreach (var track in tracksForOutput)
             {
                 string label = track.Player.Subject ?? $"actor_{track.Player.ActorNetGuid}";
                 visionByPlayer[label] = analysis.BuildVisionCones(track, visionOptions);
             }
 
-            await WriteJsonAsync(Path.Combine(outputDirectory, "vision_cones.json"), visionByPlayer);
+            await WriteJsonAsync(Path.Combine(outputDirectory, "vision_cones.json"), visionByPlayer, CompactJsonOptions);
         }
 
         onStatus?.Invoke($"Wrote analysis output to: {Path.GetFullPath(outputDirectory)}");
@@ -95,9 +120,9 @@ public static class AnalysisPipeline
         return analysis;
     }
 
-    private static async Task WriteJsonAsync<T>(string path, T value)
+    private static async Task WriteJsonAsync<T>(string path, T value, JsonSerializerOptions? options = null)
     {
         await using FileStream fs = File.Create(path);
-        await JsonSerializer.SerializeAsync(fs, value, JsonOptions);
+        await JsonSerializer.SerializeAsync(fs, value, options ?? JsonOptions);
     }
 }

@@ -34,7 +34,7 @@ public static class Program
     }
 
     // vrf-insights run <file.vrf> --vrfkit <path-to-vrfkit-exe> [--export-dir <dir>] --out <dir>
-    //     [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
+    //     [--fov 103] [--range 18000] [--eye-height 155] [--with-vision] [--movement-hz 10]
     //
     // The "one smooth command": decodes the replay with vrfkit, then runs the analysis on
     // vrfkit's output, in a single invocation. Equivalent to running `vrfkit export` yourself
@@ -49,7 +49,7 @@ public static class Program
 
         if (vrfFile is null || vrfkitExe is null)
         {
-            Console.Error.WriteLine("usage: vrf-insights run <file.vrf> --vrfkit <path-to-vrfkit(.exe)> --out <output-dir> [--export-dir <dir>] [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]");
+            Console.Error.WriteLine("usage: vrf-insights run <file.vrf> --vrfkit <path-to-vrfkit(.exe)> --out <output-dir> [--export-dir <dir>] [--fov 103] [--range 18000] [--eye-height 155] [--with-vision] [--movement-hz 10]");
             return 1;
         }
 
@@ -68,7 +68,7 @@ public static class Program
         return result.ExportSucceeded ? 0 : 1;
     }
 
-    // vrf-insights analyze <export-dir> --out <out-dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
+    // vrf-insights analyze <export-dir> --out <out-dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision] [--movement-hz 10]
     private static async Task<int> RunAnalyzeAsync(string[] args)
     {
         string? exportDir = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : null;
@@ -77,7 +77,7 @@ public static class Program
 
         if (exportDir is null)
         {
-            Console.Error.WriteLine("usage: vrf-insights analyze <vrfkit-export-dir> --out <output-dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]");
+            Console.Error.WriteLine("usage: vrf-insights analyze <vrfkit-export-dir> --out <output-dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision] [--movement-hz 10]");
             return 1;
         }
 
@@ -91,7 +91,13 @@ public static class Program
         double range = double.Parse(GetOption(args, "--range") ?? VisionConeCalculator.DefaultRangeCm.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
         double eyeHeight = double.Parse(GetOption(args, "--eye-height") ?? VisionConeCalculator.EyeHeightCm.ToString(System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
         bool withVision = HasFlag(args, "--with-vision");
-        return new AnalysisPipelineOptions(fov, range, eyeHeight, withVision);
+        double movementHz = double.Parse(GetOption(args, "--movement-hz") ?? "10", System.Globalization.CultureInfo.InvariantCulture);
+        return new AnalysisPipelineOptions(
+            FovDegrees: fov,
+            RangeCm: range,
+            EyeHeightCm: eyeHeight,
+            WithVision: withVision,
+            MovementSamplesPerSecond: movementHz);
     }
 
     // Diagnostic helper: print distinct field_name values under a group_path substring, so you
@@ -199,14 +205,19 @@ public static class Program
               2) vrf-insights analyze <export-dir> --out <output-dir> [options]
 
             Commands:
-              run <file.vrf> --vrfkit <path> --out <dir> [--export-dir <dir>] [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
+              run <file.vrf> --vrfkit <path> --out <dir> [--export-dir <dir>] [--fov 103] [--range 18000] [--eye-height 155] [--with-vision] [--movement-hz 10]
                   Decode the replay with vrfkit and analyze it, in one step. --export-dir defaults
                   to <out>/export if not given (so vrfkit's raw tables are kept alongside the
                   analysis JSON, in case you want to inspect them with dump-fields/dump-classes).
 
-              analyze <export-dir> --out <dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision]
+              analyze <export-dir> --out <dir> [--fov 103] [--range 18000] [--eye-height 155] [--with-vision] [--movement-hz 10]
                   Build the full match analysis from an existing vrfkit export and write it out
-                  as JSON files.
+                  as JSON files. --movement-hz caps movement.json (and, with --with-vision,
+                  vision_cones.json) to at most that many samples/sec per player, by minimum time
+                  spacing (always keeping each player's first and last sample) — a full-length
+                  match at full tick rate can otherwise produce a movement.json hundreds of MB in
+                  size, too large for a browser to load in the 2D replay viewer. Defaults to 10;
+                  pass --movement-hz 0 for full, undownsampled fidelity.
 
               dump-fields <export-dir> [--group <substring>] [--limit 50]
                   Print distinct (group_path, field_name) pairs — useful for confirming this
