@@ -300,6 +300,25 @@ on death, same as before this feature existed.
 - **`viewer/`** — the 2D replay viewer (plain HTML/CSS/JS, no build step); see above.
 - **`scripts/Fetch-Assets.ps1`** — downloads the viewer's map/agent art from valorant-api.com.
 
+## Agent codenames
+
+Every agent's Blueprint asset path under `/Game/Characters/...` — and so every `class_path` you'll
+see in `dump-classes`/`dump-actors` output, in `actors.parquet`, and anywhere else this project
+reads that string straight from the replay — uses Riot's internal *development* codename, not the
+agent's public release name. Reyna's folder is `Vampire`, Omen's is `Wraith`, Jett's is `Wushu`,
+Chamber's is `Deadeye`, and so on. These can't be renamed (they're literally Riot's asset
+structure baked into the replay format), so this project's own code and diagnostics will always
+show codenames in raw `class_path` strings — but everywhere else (docs, UI copy, conversation)
+should use real names.
+
+The full mapping is recorded once, in code, at
+[`AgentCodenames.cs`](src/VrfInsights.Analysis/Common/AgentCodenames.cs) — a plain lookup table
+(`CodenameToRealName`) plus a small `ResolveRealName(classPath)` helper for turning a raw
+`class_path` into a real name in logs/debugging. It's reference data, not derived from any
+replay. Only 8 of the ~30 listed agents have actually been seen in the sample export this project
+was developed against (confirmed via `dump-classes`): Gekko, Chamber, KAY/O, Phoenix, Waylay,
+Reyna, Omen, and Jett.
+
 ## On "vision cones" specifically
 
 VALORANT's replay does not replicate anything called a vision cone. What's real and exact (per
@@ -360,10 +379,22 @@ the same as a cast's real location (see `AbilityCastBuilder`'s remarks: `Ability
 called out as the one signal that attributes a real cast location, "rather than only observing a
 caster-side actor spawn"). If a given ability's effect actor is either reused across the whole
 match (equipped once near round start) or spawned once at the moment of throw (so its recorded
-position is the launch point, not the landing spot), you'd see exactly this symptom. Not fixed yet
-because it needs real evidence first — run `dump-classes` to find the exact class name for a
-smoke/molly/grenade, then `dump-actors --class <that name>` to see whether its actor is reused or
-fresh per cast, and whether its recorded spawn position tracks the real effect location or not.
+position is the launch point, not the landing spot), you'd see exactly this symptom.
+
+`dump-classes` against a real export confirms this is at least partly right, and sharpens it: a
+single smoke cast spawns **three** separately-classified actors, all of which
+`UtilityEffectClassifier` currently matches as `"Smoke"` and (per the code above) each gets its own
+`PersistentEffectEvent` marker — e.g. for Omen's smoke (class paths use the codename `Wraith` — see
+"Agent codenames" below), `Ability_Wraith_4_Smoke`, `Projectile_Wraith_4_Smoke`, and
+`Zone_Wraith_4_Smoke`; for Jett's Cloudburst (codename `Wushu`), `Ability_Wushu_4_Smoke`,
+`Projectile_Wushu_4_Smoke`, and `GameObject_Wushu_4_SmokeZone`. The `Zone`/`SmokeZone` actor is the
+most likely candidate for the true landing position (an `Ability_` actor plausibly tracks the
+caster, a `Projectile_` actor the in-flight trajectory) — but that's still a guess, not confirmed.
+Not fixed yet because it needs real evidence first: run `dump-actors --class <one of the three
+names above>` against a real export and compare the three actors' open/close timing and recorded
+spawn position side by side. That'll show whether one of them (the `Zone`/`SmokeZone` one, if the
+guess above is right) tracks the real deploy location while the other two don't — and whether
+`UtilityTimelineBuilder` needs to change to emit only one marker per cast instead of one per actor.
 
 What's a documented **assumption**, flagged in code comments, and worth checking with
 `dump-fields`/`dump-values`/`dump-classes`/`dump-actors` against your own export before trusting:
