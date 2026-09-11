@@ -77,6 +77,16 @@
       Facing offset°
       <input type="number" id="facingOffset" value="0" step="15" style="width:4.5em">
     </label>
+    <label class="check" title="Fixes everything appearing on the wrong side of the map (e.g. teams on the left/right when they should be top/bottom) -- some minimap art isn't oriented exactly how the position formula assumes. Remembered per map.">
+      Map orientation
+      <select id="mapRotate" style="width:5em">
+        <option value="0">0°</option>
+        <option value="90">90°</option>
+        <option value="180">180°</option>
+        <option value="270">270°</option>
+      </select>
+      <input type="checkbox" id="mapFlip"> Flip
+    </label>
   </div>
 </footer>
 

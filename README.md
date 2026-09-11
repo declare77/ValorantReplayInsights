@@ -165,6 +165,15 @@ control in the viewer rather than assuming the position data itself is wrong —
 piece of this viewer's math (screen rotation direction for a given yaw) that hasn't been checked
 against a real recording, and it's deliberately a live control instead of a silent guess.
 
+If everything is on the wrong side of the map — e.g. the two teams show up on the left/right when
+the map actually has spawns on the top/bottom — that's the minimap coordinate transform (also
+never pixel-checked against a real recording, see the table above) disagreeing with how that map's
+downloaded art happens to be oriented, not the underlying position data being wrong. Use the
+**Map orientation** control (rotate 0/90/180/270°, plus a flip checkbox) next to the facing offset
+to correct it by eye — try each rotation until the two teams land on the correct sides. It's
+per-map and remembered in your browser (`localStorage`) once set, so you only need to set it once
+per map, ever.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,

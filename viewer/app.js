@@ -51,6 +51,58 @@ const FACING_LOOKAHEAD_UNITS = 220;
 // particular map -- it hasn't been needed on any export this project has been checked against.
 let facingOffsetDeg = 0;
 
+// Map orientation correction --------------------------------------------------------------
+// Riot's published xMultiplier/yMultiplier/xScalarToAdd/yScalarToAdd formula (see file header)
+// hasn't been independently checked pixel-by-pixel against every map's actual minimap art, and in
+// practice a map's locally-downloaded image isn't always oriented the way that formula assumes --
+// this shows up as everything appearing rotated 90°/180° from reality (e.g. two teams' spawns
+// landing on the left/right of the image when the map itself has them on the top/bottom). Rather
+// than guess which maps need what, this is a live, per-map-remembered correction (same idea as
+// the facing-offset control above) applied in screen space, after the world->uv transform, so it
+// never has to touch the documented formula itself.
+const mapOrientation = { rotate: 0, flipH: false };
+
+function orientationStorageKey(mapUuid) { return 'vrf-map-orientation:' + mapUuid; }
+
+function loadMapOrientation(mapUuid) {
+  try {
+    const raw = mapUuid ? localStorage.getItem(orientationStorageKey(mapUuid)) : null;
+    if (!raw) return { rotate: 0, flipH: false };
+    const parsed = JSON.parse(raw);
+    return { rotate: Number(parsed.rotate) || 0, flipH: !!parsed.flipH };
+  } catch { return { rotate: 0, flipH: false }; }
+}
+
+function saveMapOrientation(mapUuid) {
+  if (!mapUuid) return;
+  try { localStorage.setItem(orientationStorageKey(mapUuid), JSON.stringify(mapOrientation)); }
+  catch { /* private-mode / storage disabled -- orientation just won't be remembered next time */ }
+}
+
+/** Rotates/flips a normalized (u,v) point in [0,1] around the image center. Screen-space only --
+ * independent of worldToUv's world-unit math, so it corrects mismatched minimap art without
+ * needing to touch (or understand) Riot's own coordinate formula. */
+function applyOrientation(u, v) {
+  let x = u - 0.5, y = v - 0.5;
+  if (mapOrientation.flipH) x = -x;
+  switch (((mapOrientation.rotate % 360) + 360) % 360) {
+    case 90: { const nx = -y, ny = x; x = nx; y = ny; break; }
+    case 180: { x = -x; y = -y; break; }
+    case 270: { const nx = y, ny = -x; x = nx; y = ny; break; }
+    default: break;
+  }
+  return { u: x + 0.5, v: y + 0.5 };
+}
+
+/** World units -> screen pixels, applying both the map's own transform and the (usually
+ * identity) orientation correction above. Every drawing function should go through this rather
+ * than calling worldToUv directly, so the orientation control affects everything consistently. */
+function toPixel(x, y, w, h) {
+  const uv = worldToUv(x, y, state.map);
+  const oriented = applyOrientation(uv.u, uv.v);
+  return { x: oriented.u * w, y: oriented.v * h };
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -195,6 +247,8 @@ const timeLabel = document.getElementById('timeLabel');
 const roundLabel = document.getElementById('roundLabel');
 const visionToggle = document.getElementById('visionToggle');
 const facingOffsetInput = document.getElementById('facingOffset');
+const mapRotateSelect = document.getElementById('mapRotate');
+const mapFlipCheckbox = document.getElementById('mapFlip');
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -322,14 +376,34 @@ function resolveMap() {
   mapPicker.hidden = catalogMaps.length === 0;
 
   mapSelect.onchange = () => {
-    if (!mapSelect.value) { state.map = null; loadMapImage(); return; }
+    if (!mapSelect.value) { state.map = null; applyLoadedOrientation(); loadMapImage(); return; }
     const chosen = catalogMaps.find((m) => m.uuid === mapSelect.value);
     state.map = chosen ? normalizeMapInfo(chosen) : null;
+    applyLoadedOrientation();
     loadMapImage();
   };
 
+  applyLoadedOrientation();
   loadMapImage();
 }
+
+/** Loads this map's remembered orientation correction (if any) into state + the UI controls. */
+function applyLoadedOrientation() {
+  const loaded = loadMapOrientation(state.map && state.map.uuid);
+  mapOrientation.rotate = loaded.rotate;
+  mapOrientation.flipH = loaded.flipH;
+  mapRotateSelect.value = String(loaded.rotate);
+  mapFlipCheckbox.checked = loaded.flipH;
+}
+
+mapRotateSelect.addEventListener('change', () => {
+  mapOrientation.rotate = Number(mapRotateSelect.value) || 0;
+  saveMapOrientation(state.map && state.map.uuid);
+});
+mapFlipCheckbox.addEventListener('change', () => {
+  mapOrientation.flipH = mapFlipCheckbox.checked;
+  saveMapOrientation(state.map && state.map.uuid);
+});
 
 function loadMapImage() {
   const catalog = window.VRF_CATALOG;
@@ -518,23 +592,23 @@ function drawUtility(w, h) {
     if (t < u.SpawnTimeMs) continue;
     if (u.DespawnTimeMs != null && t >= u.DespawnTimeMs) continue;
 
-    const origin = worldToUv(u.X, u.Y, state.map);
-    const px = origin.u * w, py = origin.v * h;
+    const origin = toPixel(u.X, u.Y, w, h);
+    const px = origin.x, py = origin.y;
     const color = UTILITY_COLORS[u.Category] || 'rgba(255,255,255,0.6)';
 
     if (u.Category === 'Wall') {
       const yaw = (u.YawDegrees || 0) * Math.PI / 180;
-      const p1 = worldToUv(u.X - Math.cos(yaw) * WALL_HALF_LENGTH_UNITS, u.Y - Math.sin(yaw) * WALL_HALF_LENGTH_UNITS, state.map);
-      const p2 = worldToUv(u.X + Math.cos(yaw) * WALL_HALF_LENGTH_UNITS, u.Y + Math.sin(yaw) * WALL_HALF_LENGTH_UNITS, state.map);
+      const p1 = toPixel(u.X - Math.cos(yaw) * WALL_HALF_LENGTH_UNITS, u.Y - Math.sin(yaw) * WALL_HALF_LENGTH_UNITS, w, h);
+      const p2 = toPixel(u.X + Math.cos(yaw) * WALL_HALF_LENGTH_UNITS, u.Y + Math.sin(yaw) * WALL_HALF_LENGTH_UNITS, w, h);
       ctx.strokeStyle = color;
       ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.moveTo(p1.u * w, p1.v * h);
-      ctx.lineTo(p2.u * w, p2.v * h);
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
     } else if (u.Category === 'Smoke' || u.Category === 'IncendiaryOrMolly') {
-      const edge = worldToUv(u.X + UTILITY_AREA_RADIUS_UNITS, u.Y, state.map);
-      const radiusPx = Math.max(Math.abs(edge.u - origin.u) * w, 4);
+      const edge = toPixel(u.X + UTILITY_AREA_RADIUS_UNITS, u.Y, w, h);
+      const radiusPx = Math.max(Math.hypot(edge.x - origin.x, edge.y - origin.y), 4);
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(px, py, radiusPx, 0, Math.PI * 2);
@@ -556,10 +630,10 @@ function drawAbilityCasts(w, h) {
     if (age < 0 || age > ABILITY_MARKER_FADE_MS) continue;
 
     const alpha = 1 - age / ABILITY_MARKER_FADE_MS;
-    const p = worldToUv(cast.CastX, cast.CastY, state.map);
+    const p = toPixel(cast.CastX, cast.CastY, w, h);
     ctx.fillStyle = `rgba(255,255,255,${(alpha * 0.9).toFixed(2)})`;
     ctx.beginPath();
-    ctx.arc(p.u * w, p.v * h, 10 * alpha + 3, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, 10 * alpha + 3, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -574,19 +648,19 @@ function drawVisionCones(w, h) {
     if (!cone) continue;
 
     const color = state.playerColor.get(key) || '#ffffff';
-    const origin = worldToUv(cone.OriginX, cone.OriginY, state.map);
+    const origin = toPixel(cone.OriginX, cone.OriginY, w, h);
 
     ctx.fillStyle = colorWithAlpha(color, 0.1);
     ctx.beginPath();
-    ctx.moveTo(origin.u * w, origin.v * h);
+    ctx.moveTo(origin.x, origin.y);
 
     const segments = 12;
     const startDeg = cone.ForwardYawDeg - cone.HalfAngleDeg;
     const stepDeg = (2 * cone.HalfAngleDeg) / segments;
     for (let i = 0; i <= segments; i++) {
       const angle = (startDeg + stepDeg * i) * Math.PI / 180;
-      const p = worldToUv(cone.OriginX + Math.cos(angle) * cone.RangeCm, cone.OriginY + Math.sin(angle) * cone.RangeCm, state.map);
-      ctx.lineTo(p.u * w, p.v * h);
+      const p = toPixel(cone.OriginX + Math.cos(angle) * cone.RangeCm, cone.OriginY + Math.sin(angle) * cone.RangeCm, w, h);
+      ctx.lineTo(p.x, p.y);
     }
     ctx.closePath();
     ctx.fill();
@@ -600,8 +674,8 @@ function drawPlayers(w, h) {
     const sample = interpolateSample(track.Samples, state.currentTimeMs);
     if (!sample) continue;
 
-    const origin = worldToUv(sample.PosX, sample.PosY, state.map);
-    const px = origin.u * w, py = origin.v * h;
+    const origin = toPixel(sample.PosX, sample.PosY, w, h);
+    const px = origin.x, py = origin.y;
     const color = state.playerColor.get(key) || '#ffffff';
 
     // Facing arrow: project a point ahead of the player in game-world space (using VALORANT's
@@ -609,12 +683,12 @@ function drawPlayers(w, h) {
     // screen directly — that way it's automatically correct regardless of how a given map's
     // transform flips or scales axes.
     const yawRad = (sample.Yaw + facingOffsetDeg) * Math.PI / 180;
-    const ahead = worldToUv(sample.PosX + Math.cos(yawRad) * FACING_LOOKAHEAD_UNITS, sample.PosY + Math.sin(yawRad) * FACING_LOOKAHEAD_UNITS, state.map);
+    const ahead = toPixel(sample.PosX + Math.cos(yawRad) * FACING_LOOKAHEAD_UNITS, sample.PosY + Math.sin(yawRad) * FACING_LOOKAHEAD_UNITS, w, h);
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px, py);
-    ctx.lineTo(ahead.u * w, ahead.v * h);
+    ctx.lineTo(ahead.x, ahead.y);
     ctx.stroke();
 
     const img = state.playerAgentImage.get(key);
