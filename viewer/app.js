@@ -173,20 +173,48 @@ function solve3x3(M, b) {
  * points are degenerate (collinear, or fewer than 3 distinct locations). */
 function solveAffine(points) {
   if (points.length < 3) return null;
+
+  // World coordinates (PosX/PosY) are typically several thousand units, and feeding those
+  // straight into the normal-equations matrix below (which involves their squares and a lone "1"
+  // per point for the constant term) makes it extremely poorly conditioned -- entries spanning
+  // many orders of magnitude in the same matrix. That can produce a wildly wrong fit even though
+  // it satisfies the exact points used to compute it (most visible right at the 3-point minimum,
+  // where the fit passes through those points exactly no matter how unstable it is elsewhere).
+  // Centering on the points' own mean and scaling to roughly [-1,1] first keeps the matrix
+  // well-conditioned; the result is converted back to plain world-unit coefficients before
+  // returning, so callers never see the normalized space.
+  const n = points.length;
+  let mx = 0, my = 0;
+  for (const p of points) { mx += p.x; my += p.y; }
+  mx /= n; my /= n;
+
+  let s = 1; // avoid divide-by-zero; a true zero-spread case is already caught as degenerate below
+  for (const p of points) {
+    s = Math.max(s, Math.abs(p.x - mx), Math.abs(p.y - my));
+  }
+
   let Sxx = 0, Sxy = 0, Sx = 0, Syy = 0, Sy = 0;
   let Sxu = 0, Syu = 0, Su = 0, Sxv = 0, Syv = 0, Sv = 0;
   for (const p of points) {
-    Sxx += p.x * p.x; Sxy += p.x * p.y; Sx += p.x;
-    Syy += p.y * p.y; Sy += p.y;
-    Sxu += p.x * p.u; Syu += p.y * p.u; Su += p.u;
-    Sxv += p.x * p.v; Syv += p.y * p.v; Sv += p.v;
+    const nx = (p.x - mx) / s, ny = (p.y - my) / s;
+    Sxx += nx * nx; Sxy += nx * ny; Sx += nx;
+    Syy += ny * ny; Sy += ny;
+    Sxu += nx * p.u; Syu += ny * p.u; Su += p.u;
+    Sxv += nx * p.v; Syv += ny * p.v; Sv += p.v;
   }
-  const n = points.length;
   const M = [[Sxx, Sxy, Sx], [Sxy, Syy, Sy], [Sx, Sy, n]];
   const abc = solve3x3(M, [Sxu, Syu, Su]);
   const def = solve3x3(M, [Sxv, Syv, Sv]);
   if (!abc || !def) return null;
-  return { A: abc[0], B: abc[1], C: abc[2], D: def[0], E: def[1], F: def[2] };
+
+  // Undo the centering/scaling: with nx=(x-mx)/s, ny=(y-my)/s,
+  // u = A'*nx + B'*ny + C' = (A'/s)*x + (B'/s)*y + (C' - (A'*mx + B'*ny... )/s), expanded below.
+  const [Ap, Bp, Cp] = abc;
+  const [Dp, Ep, Fp] = def;
+  return {
+    A: Ap / s, B: Bp / s, C: Cp - (Ap * mx + Bp * my) / s,
+    D: Dp / s, E: Ep / s, F: Fp - (Dp * mx + Ep * my) / s,
+  };
 }
 
 /** World units -> screen pixels. Uses the calibrated fit above when one exists for the current
@@ -404,8 +432,21 @@ function buildCalibratePlayerList() {
   });
 }
 
+/** Per-point error against a fit, as % of the map -- the whole point of having more than the
+ * bare-minimum 3 points: with exactly 3, the fit passes through all of them exactly (residual
+ * ~0) no matter how wrong a mis-clicked point is, so nothing here would ever flag it. With 4+,
+ * one bad point among otherwise-good ones stands out as a visibly larger error than the rest. */
+function calibrationResidualPct(fit, p) {
+  const pu = fit.A * p.x + fit.B * p.y + fit.C;
+  const pv = fit.D * p.x + fit.E * p.y + fit.F;
+  return Math.hypot(pu - p.u, pv - p.v) * 100;
+}
+
 function renderCalibratePointsTable() {
   calibratePointsBody.innerHTML = '';
+  // Only meaningful once there's a saved fit computed from (in general) more points than any one
+  // point can perfectly satisfy -- see calibrationResidualPct's remarks.
+  const fitForResiduals = mapCalibration;
   calibrationPoints.forEach((p, idx) => {
     const tr = document.createElement('tr');
     const cells = [
@@ -414,6 +455,7 @@ function renderCalibratePointsTable() {
       p.x.toFixed(0),
       p.y.toFixed(0),
       (p.u * 100).toFixed(1) + '%, ' + (p.v * 100).toFixed(1) + '%',
+      fitForResiduals ? calibrationResidualPct(fitForResiduals, p).toFixed(1) + '%' : '—',
     ];
     for (const text of cells) {
       const td = document.createElement('td');
@@ -477,8 +519,15 @@ canvas.addEventListener('click', (e) => {
 });
 
 btnCalibrateCompute.addEventListener('click', () => {
-  if (calibrationPoints.length < 3) {
-    calibrateResult.textContent = 'Need at least 3 points (spread across different areas of the map) to compute a fit.';
+  // 3 points exactly determine an affine transform, which means the fit passes through all 3
+  // perfectly no matter what -- there's no redundancy to catch one bad/mis-clicked point, and the
+  // resulting fit can be wildly wrong anywhere else on the map despite reporting "0% error". 4+
+  // points make the system over-determined, so a bad point actually shows up as a worse residual
+  // than the others instead of hiding perfectly.
+  if (calibrationPoints.length < 4) {
+    calibrateResult.textContent = 'Need at least 4 points to compute a fit that can catch a bad ' +
+      'click -- with only 3, the fit passes through them exactly even if one is wrong, and you\'d ' +
+      'have no way to tell. Add at least one more (6 or more is even better) and try again.';
     return;
   }
   const fit = solveAffine(calibrationPoints);
@@ -487,19 +536,24 @@ btnCalibrateCompute.addEventListener('click', () => {
     return;
   }
 
-  let worstErrorPct = 0;
-  for (const p of calibrationPoints) {
-    const pu = fit.A * p.x + fit.B * p.y + fit.C;
-    const pv = fit.D * p.x + fit.E * p.y + fit.F;
-    worstErrorPct = Math.max(worstErrorPct, Math.hypot(pu - p.u, pv - p.v) * 100);
-  }
+  const residuals = calibrationPoints.map((p) => calibrationResidualPct(fit, p));
+  const worstErrorPct = Math.max(...residuals);
+  const avgErrorPct = residuals.reduce((a, b) => a + b, 0) / residuals.length;
 
   mapCalibration = Object.assign({}, fit, { points: calibrationPoints.slice() });
   saveMapCalibration(state.map && state.map.uuid, mapCalibration);
   updateFitModeStatus();
-  calibrateResult.textContent = 'Saved -- worst point is off by ' + worstErrorPct.toFixed(1) +
-    '% of the map. If that looks too high, add more points (especially anywhere it still looks ' +
-    'off) and compute again -- it recalculates from every point currently in the table.';
+  renderCalibratePointsTable();
+
+  let message = 'Saved -- average error ' + avgErrorPct.toFixed(1) + '% of the map, worst point ' +
+    worstErrorPct.toFixed(1) + '% (see the Error column in the table above).';
+  if (worstErrorPct > avgErrorPct * 2.5 && worstErrorPct > 3) {
+    message += ' One point stands out as much worse than the rest -- that\'s usually a mis-click ' +
+      'or wrong player/moment on that one specific point. Remove it (✕) and add a fresh one, then compute again.';
+  } else if (worstErrorPct > 5) {
+    message += ' That looks high across the board -- try re-picking a couple of points more precisely, or add more spread-out ones.';
+  }
+  calibrateResult.textContent = message;
 });
 
 btnCalibrateClear.addEventListener('click', () => {

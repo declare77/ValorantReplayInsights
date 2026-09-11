@@ -65,7 +65,10 @@
   <ol class="hint">
     <li>Pause at a moment where you know exactly where a player is standing.</li>
     <li>Pick that player below, then click <strong>Pick location</strong> and click that spot on the map.</li>
-    <li>Repeat for at least 3 points — spread out across the map, not clustered together — then click <strong>Compute &amp; save fit</strong>.</li>
+    <li>Repeat for at least <strong>4 points</strong> (6 or more is better) — spread out across
+      different areas of the map, not clustered together — then click <strong>Compute &amp; save fit</strong>.
+      Fewer than 4 can't catch a mis-click: with exactly 3 the fit passes through all of them
+      perfectly even if one is wrong, so there'd be no way to tell from the result alone.</li>
   </ol>
   <div id="calibrateControls">
     <label>Player:
@@ -75,7 +78,7 @@
     <span id="calibrateStatus" class="hint"></span>
   </div>
   <table id="calibratePointsTable">
-    <thead><tr><th>Player</th><th>Time</th><th>World X</th><th>World Y</th><th>Clicked at</th><th></th></tr></thead>
+    <thead><tr><th>Player</th><th>Time</th><th>World X</th><th>World Y</th><th>Clicked at</th><th>Error</th><th></th></tr></thead>
     <tbody id="calibratePointsBody"></tbody>
   </table>
   <div id="calibrateActions">

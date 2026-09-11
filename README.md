@@ -188,14 +188,24 @@ to defaults (0° rotation, no flip, scale 1, no pan) if you want to start over.
 error, and you'd have to redo it if it's ever slightly off. The **Calibrate map fit** panel (below
 the roster, next to Debug info) does it properly instead: pause on a moment where you know exactly
 where a player is standing, pick that player, click **Pick location**, then click that exact spot
-on the map. Do that for at least 3 points spread across different areas of the map (not clustered
-together — the more spread out, the more accurate the fit), then click **Compute & save fit**. It
-works out the correct transform from those correspondences by least squares and tells you the
-worst point's error as a percentage of the map, so you know how good the fit is — add more points
-and recompute if that number looks too high. This is a property of the map (its image and Riot's
-coordinate data for it), not of any one replay, so once it's saved for a map it's automatically
-used for every future replay on that same map too — the manual sliders are ignored whenever a
-calibrated fit exists, and a **Clear calibration** button reverts to them if you ever want to.
+on the map. Do that for **at least 4 points** spread across different areas of the map (not
+clustered together — 6 or more is even better), then click **Compute & save fit**. It works out the
+correct transform from those correspondences by least squares and shows each point's own error (as
+% of the map) right in the table, plus the average and worst overall, so a bad click stands out
+instead of hiding.
+
+4 is a hard minimum, not just a suggestion: 3 points exactly determine an affine transform, so the
+fit passes through all 3 perfectly no matter what — including if one of them was a mis-click or the
+wrong player/moment — and would report a perfect-looking "0% error" while still being badly wrong
+everywhere else on the map (this is exactly what happened the first time this feature shipped: 3
+points, one slightly off, and most players ended up scattered off the map entirely on a replay far
+from those 3 points). With 4 or more, a bad point actually shows up as a visibly larger error than
+the rest, so you know which one to remove (✕) and redo.
+
+This is a property of the map (its image and Riot's coordinate data for it), not of any one replay,
+so once it's saved for a map it's automatically used for every future replay on that same map too —
+the manual sliders are ignored whenever a calibrated fit exists, and a **Clear calibration** button
+reverts to them if you ever want to start over.
 
 If you're not sure the transform itself is right (positions clipping into walls, or way off the
 map entirely), open the **Debug info** panel below the roster after loading a match — it lists
