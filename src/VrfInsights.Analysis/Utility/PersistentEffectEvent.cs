@@ -4,6 +4,10 @@ namespace VrfInsights.Analysis.Utility;
 
 /// <param name="DespawnTimeMs">Null if the actor never closed before the replay ended (or if
 /// the export ends while it's still dormant).</param>
+/// <param name="YawDegrees">The actor's spawn yaw (<c>actors.parquet</c>'s <c>spawn_yaw</c>),
+/// carried through mainly so a directional effect (a wall) can be drawn oriented rather than as
+/// a bare point — a 2D viewer still has to assume a length for that line since this table has no
+/// size/extent field, so treat the drawn line as an approximation, not measured geometry.</param>
 public sealed record PersistentEffectEvent(
     long ActorNetGuid,
     string? ClassPath,
@@ -12,7 +16,8 @@ public sealed record PersistentEffectEvent(
     long? DespawnTimeMs,
     double? X,
     double? Y,
-    double? Z);
+    double? Z,
+    double? YawDegrees);
 
 /// <summary>
 /// Builds smoke/wall/molly/trap/etc. placement events from <c>actors.parquet</c>'s open/close
@@ -72,7 +77,8 @@ public static class UtilityTimelineBuilder
                         DespawnTimeMs: row.TimeMs,
                         X: entry.OpenRow.SpawnX,
                         Y: entry.OpenRow.SpawnY,
-                        Z: entry.OpenRow.SpawnZ));
+                        Z: entry.OpenRow.SpawnZ,
+                        YawDegrees: entry.OpenRow.SpawnYaw));
                 }
             }
         }
@@ -89,7 +95,8 @@ public static class UtilityTimelineBuilder
                 DespawnTimeMs: null,
                 X: entry.OpenRow.SpawnX,
                 Y: entry.OpenRow.SpawnY,
-                Z: entry.OpenRow.SpawnZ));
+                Z: entry.OpenRow.SpawnZ,
+                YawDegrees: entry.OpenRow.SpawnYaw));
         }
 
         results.Sort((a, b) => a.SpawnTimeMs.CompareTo(b.SpawnTimeMs));

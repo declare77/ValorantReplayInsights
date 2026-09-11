@@ -17,6 +17,10 @@ public sealed class MatchAnalysis
 {
     public required string ReplayBuild { get; init; }
     public required long DurationMs { get; init; }
+    /// <summary>Best-effort map detection (see <see cref="Identity.MapDetector"/>) — null when
+    /// the map's asset path couldn't be found anywhere in this export. A 2D replay viewer should
+    /// let the user pick the map manually in that case rather than assume one.</summary>
+    public required MapInfo? Map { get; init; }
     public required IReadOnlyList<PlayerIdentity> Players { get; init; }
     public required IReadOnlyList<RoundInfo> Rounds { get; init; }
     public required IReadOnlyList<MatchEvent> Events { get; init; }
@@ -27,17 +31,22 @@ public sealed class MatchAnalysis
     public required IReadOnlyList<CombatInteraction> CombatInteractions { get; init; }
     public required IReadOnlyList<EconomySnapshot> Economy { get; init; }
 
-    public static MatchAnalysis Build(VrfExportSet export, AgentCatalog agentCatalog, VisionConeOptions? visionOptions = null)
+    public static MatchAnalysis Build(VrfExportSet export, AgentCatalog agentCatalog, VisionConeOptions? visionOptions = null) =>
+        Build(export, agentCatalog, MapCatalog.LoadEmbedded(), visionOptions);
+
+    public static MatchAnalysis Build(VrfExportSet export, AgentCatalog agentCatalog, MapCatalog mapCatalog, VisionConeOptions? visionOptions = null)
     {
         IReadOnlyList<PlayerIdentity> players = PlayerRegistry.Build(export, agentCatalog);
         IReadOnlyList<RoundInfo> rounds = RoundTimelineBuilder.BuildRounds(export.Events);
         IReadOnlyList<MatchEvent> events = RoundTimelineBuilder.BuildEventTimeline(export.Events, rounds);
         IReadOnlyList<PlayerTrack> tracks = MovementTimelineBuilder.Build(export, players);
+        MapInfo? map = MapDetector.Detect(export, mapCatalog);
 
         return new MatchAnalysis
         {
             ReplayBuild = export.Manifest.ReplayBuild ?? "(unknown)",
             DurationMs = export.Manifest.DurationMs,
+            Map = map,
             Players = players,
             Rounds = rounds,
             Events = events,

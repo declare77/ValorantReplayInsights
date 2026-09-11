@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using VrfInsights.Analysis;
 using VrfInsights.Analysis.Identity;
 using VrfInsights.Analysis.Vision;
@@ -22,7 +23,14 @@ public sealed record AnalysisPipelineOptions(
 /// </summary>
 public static class AnalysisPipeline
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    // JsonStringEnumConverter so e.g. UtilityCategory comes out as "Smoke" rather than a bare
+    // integer — self-describing for anything else that consumes this JSON (the 2D replay
+    // viewer included) without needing to know this project's enum declaration order.
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     public static async Task<MatchAnalysis> RunAsync(
         string exportDirectory,
@@ -55,6 +63,7 @@ public static class AnalysisPipeline
         {
             analysis.ReplayBuild,
             analysis.DurationMs,
+            Map = analysis.Map,
             Players = analysis.Players,
             Rounds = analysis.Rounds,
         });

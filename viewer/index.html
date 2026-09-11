@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VALORANT 2D Replay Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>VALORANT 2D Replay Viewer</h1>
+  <div id="mapPicker" hidden>
+    <label>Map:
+      <select id="mapSelect"></select>
+    </label>
+  </div>
+  <button id="btnLoadDifferent" hidden>Load a different replay</button>
+</header>
+
+<section id="loadPanel">
+  <p>
+    Select <strong>every file</strong> from one analysis output folder (the folder produced by
+    <code>vrf-insights analyze</code>/<code>run</code>, or the GUI's output folder — usually the
+    folder itself, not the <code>export</code> subfolder inside it). <code>match.json</code> and
+    <code>movement.json</code> are required; the rest add detail if present.
+  </p>
+  <input type="file" id="fileInput" multiple accept=".json">
+  <p id="loadStatus"></p>
+  <p class="hint">
+    No map/agent art yet? Run <code>scripts/Fetch-Assets.ps1</code> once (see the project
+    README) — this page can't reach valorant-api.com itself when opened as a local file.
+  </p>
+</section>
+
+<main id="viewerRoot" hidden>
+  <div id="stageWrap">
+    <div id="stage">
+      <canvas id="mapCanvas"></canvas>
+      <div id="mapOverlayMessage" class="overlay-message"></div>
+    </div>
+    <div id="legend">
+      <span class="legend-item"><i class="swatch" style="background:rgba(200,200,200,0.85)"></i>Smoke</span>
+      <span class="legend-item"><i class="swatch" style="background:rgba(255,120,40,0.85)"></i>Molly / incendiary</span>
+      <span class="legend-item"><i class="swatch" style="background:rgba(180,120,255,0.9)"></i>Wall</span>
+      <span class="legend-item"><i class="swatch" style="background:rgba(255,220,60,0.9)"></i>Trap / mine</span>
+      <span class="legend-item"><i class="swatch" style="background:rgba(255,70,70,0.9)"></i>Turret</span>
+      <span class="legend-item"><i class="swatch" style="background:rgba(80,220,220,0.9)"></i>Grenade / projectile</span>
+      <span class="legend-item"><i class="swatch" style="background:rgba(60,200,160,0.9)"></i>Drone / deployable</span>
+      <span class="legend-hint">Utility shapes/sizes are approximate — the replay doesn't record exact geometry, see README.</span>
+    </div>
+  </div>
+
+  <aside id="roster"></aside>
+</main>
+
+<footer id="controls" hidden>
+  <div id="chapters"></div>
+  <input type="range" id="scrubber" min="0" max="1000" value="0" step="10">
+  <div id="transport">
+    <button id="btnRestartRound" title="Restart round / previous round">⏮</button>
+    <button id="btnPlayPause" title="Play / pause">▶</button>
+    <button id="btnNextRound" title="Next round">⏭</button>
+    <select id="speedSelect" title="Playback speed">
+      <option value="0.25">0.25x</option>
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="2">2x</option>
+      <option value="4">4x</option>
+    </select>
+    <span id="timeLabel">0:00 / 0:00</span>
+    <span id="roundLabel"></span>
+    <label class="check" title="Only available if vision_cones.json was included (analyze --with-vision)">
+      <input type="checkbox" id="visionToggle" disabled> Vision cones (approximate)
+    </label>
+    <label class="check" title="Nudge this if facing arrows look rotated/mirrored on a particular map">
+      Facing offset°
+      <input type="number" id="facingOffset" value="0" step="15" style="width:4.5em">
+    </label>
+  </div>
+</footer>
+
+<script src="../assets/catalog.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

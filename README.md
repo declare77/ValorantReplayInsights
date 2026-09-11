@@ -86,7 +86,7 @@ already wrote, exactly like Option C does by hand.
 
 | File | Contents |
 |---|---|
-| `match.json` | Replay build, duration, resolved player/agent/loadout list, round boundaries |
+| `match.json` | Replay build, duration, detected map (see below), resolved player/agent/loadout list, round boundaries |
 | `events.json` | The server's own event timeline (kills, ultimates, spike plant/defuse/explode, round starts), attributed to a round number |
 | `movement.json` | Per-player position/rotation/velocity time series (from `movement.parquet`) |
 | `vision_cones.json` | *(only with `--with-vision`)* one derived vision cone per movement sample per player |
@@ -103,6 +103,52 @@ dotnet run --project src/VrfInsights.Cli -- dump-fields ./export --group Comp_Ab
 dotnet run --project src/VrfInsights.Cli -- dump-classes ./export
 ```
 
+## 2D replay viewer
+
+`viewer/index.html` plays a whole match back on the real minimap: agents moving smoothly between
+their recorded positions, utility/abilities appearing and disappearing where they were used, a
+scrubber with one chapter per round, and play/pause/rewind/fast-forward/speed controls. It's a
+plain local HTML/CSS/JS page — no server, no build step, nothing sent anywhere — that reads the
+JSON files above straight off your disk in the browser.
+
+**One-time setup — get the map/agent art.** This project's own sandbox can't reach
+valorant-api.com (its network policy blocks it), so a small script does that part on your machine
+instead, which has normal internet access:
+
+```powershell
+.\scripts\Fetch-Assets.ps1
+```
+
+This downloads every competitive map's minimap image and every agent's icon from Riot's own
+public content API into `assets/maps/`, `assets/agents/`, plus `assets/catalog.json` /
+`assets/catalog.js` (metadata the viewer reads — see the script's own comments for why there are
+two copies). Safe to re-run any time; already-downloaded files are skipped. If you'd rather not
+run a script against a third-party API yourself, tell me and I'll take the images as an upload
+instead — either way, nothing about the vrfkit/decoding side of this project is affected, this is
+purely artwork.
+
+**Using it:** open `viewer/index.html` in a browser, select every file from one `analyze`/`run`
+output folder in the file picker (`match.json` and `movement.json` are required, the rest add
+detail), and it starts playing. If the map couldn't be auto-detected from the replay, pick it from
+the dropdown that appears.
+
+What it draws, and how honestly-approximate each part is:
+
+| On screen | Source | How exact |
+|---|---|---|
+| Player position, movement | `movement.json`, linearly interpolated between samples | Exact positions; smooth motion is this viewer's own interpolation, not extra recorded data |
+| Facing direction | `movement.json`'s yaw | Exact yaw value; the on-screen rotation direction is a documented, adjustable assumption — see below |
+| Agent icon / map image | `assets/` (from `Fetch-Assets.ps1`) | Riot's own official art |
+| Minimap placement | Riot's published per-map `xMultiplier`/`yMultiplier`/`xScalarToAdd`/`yScalarToAdd` | Riot's own documented formula, not independently pixel-checked here |
+| Smoke/molly circle size, wall line length | Fixed constants in `app.js` | Visual approximation — the replay only gives a spawn point (and, for a wall, a spawn yaw), never a size |
+| Ability-cast flash | `ability_casts.json`'s `FirstObservedAtMs` | Approximate timing, see the CastTime caveat above |
+| Vision cones (optional toggle) | `vision_cones.json`, if you ran `analyze --with-vision` | Same derived approximation described below |
+
+If a facing arrow looks rotated or mirrored on a particular map, use the **Facing offset°**
+control in the viewer rather than assuming the position data itself is wrong — that's the one
+piece of this viewer's math (screen rotation direction for a given yaw) that hasn't been checked
+against a real recording, and it's deliberately a live control instead of a silent guess.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,
@@ -110,7 +156,8 @@ dotnet run --project src/VrfInsights.Cli -- dump-classes ./export
 - **`VrfInsights.Analysis`** — everything derived: player identity (joining `manifest.players` to
   `game_specific_data`'s `playerLoadouts`), movement tracks, vision cones (computed — VALORANT's
   replay doesn't carry a "vision cone" field, see below), round timeline, utility/persistent-effect
-  lifecycle, ability casts, combat interactions, economy.
+  lifecycle, ability casts, combat interactions, economy, and best-effort map detection
+  (`Identity/MapDetector.cs` + `Identity/MapCatalog.cs`, against Riot's own map list).
 - **`VrfInsights.Pipeline`** — shells out to `vrfkit.exe` (`VrfkitExportRunner`) and runs the
   analysis (`AnalysisPipeline`); `FullPipeline` composes the two into the "one command" flow.
   `VrfkitBootstrapper` automates `git clone` + `cargo build` for vrfkit itself (see Option A
@@ -124,6 +171,8 @@ dotnet run --project src/VrfInsights.Cli -- dump-classes ./export
   `VrfInsights.Pipeline`, for people who'd rather click buttons than type CLI flags.
 - **`VrfInsights.Tests`** — xUnit tests for the pure-logic pieces (array-flattening pivot, vision
   cone geometry, round/event attribution, utility open/dormant/close state machine).
+- **`viewer/`** — the 2D replay viewer (plain HTML/CSS/JS, no build step); see above.
+- **`scripts/Fetch-Assets.ps1`** — downloads the viewer's map/agent art from valorant-api.com.
 
 ## On "vision cones" specifically
 
@@ -173,6 +222,20 @@ What's a documented **assumption**, flagged in code comments, and worth checking
   same endpoint.
 - `events.characterUltimateUsed` overcounts actual ultimate casts by ~51.5% per vrfkit's own
   measurement (it's the easy signal, not the precise one — see `UltimateUsageBuilder`'s remarks).
+- Map detection (`MapDetector`) is a substring search for a known map's internal asset-path
+  folder name (e.g. `Duality` for Bind) inside `net_guids.parquet`/`actors.parquet` paths — a
+  reasonable bet since that path has to appear *somewhere* in an object-path table, but not a
+  confirmed "this field means the map." Comes back `null` (never a wrong guess) when nothing
+  matches, and `match.json`'s `Map` field is null in that case — the viewer then asks you to pick
+  the map yourself rather than assuming one.
+- The map coordinate transform (`xMultiplier`/`yMultiplier`/`xScalarToAdd`/`yScalarToAdd` in
+  `Identity/maps.json`) is Riot's own published formula from valorant-api.com, used exactly as
+  published — not reverse-engineered — but not independently pixel-checked here against a real
+  replay overlaid on a real minimap image.
+- `PersistentEffectEvent.YawDegrees` (an actor's spawn yaw) is carried straight from
+  `actors.parquet`'s `spawn_yaw`, same confidence as the rest of that table — what's an assumption
+  is only how the 2D viewer *uses* it (a fixed-length line for a wall, since the replay has no
+  size/extent field for it).
 
 `VrfInsights.Pipeline` and `VrfInsights.Gui` are new and carry the same caveat as the rest of
 this project — please actually click through the GUI once (or run `vrf-insights run`) before
