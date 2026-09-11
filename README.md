@@ -268,9 +268,25 @@ wrong. Three ways this gets fixed, in the order the viewer itself tries them:
    reading the map image's pixels back", that's this: re-run `Fetch-Assets.ps1` (no `-Force`
    needed — it doesn't need to re-download any images, just regenerate `catalog.js` with the added
    data) and reload the page.
+
+   **A map can also have its rotation pinned from real per-match calibration scores**
+   (`CONFIRMED_ORIENTATIONS` in `viewer/app.js`) without skipping the scale/pan fit — this is
+   different from #2 below. Real official minimap art turns out to have plenty of transparent void
+   *inside* its outer shape too (walls, out-of-bounds interior gaps), not just the four corners this
+   whole feature leans on — so even the genuinely correct rotation for a map can land well under
+   `AUTO_ORIENTATION_MIN_SCORE` (Ascent's real data: rotate=90°+flip scored 64%, a clear, consistent
+   16%+ margin over every other candidate, but still short of the 75% bar). Rather than loosen that
+   bar for every map — which would risk a false-confident pick on some future map with no real data
+   behind it — a map can instead be pinned here once its own calibration scores clearly settle it,
+   the same way `KNOWN_MAP_ORIENTATIONS` pins a screenshot-confirmed one. The difference: a
+   `CONFIRMED_ORIENTATIONS` entry still gets scale/pan fit fresh from every replay's own recorded
+   footprint (via the same per-candidate fit as #1), it just skips re-deciding *which* rotation to
+   use. Ascent is the first entry, from a real 24-round match — the Debug info panel's line for it
+   will say "applied (rotation pre-confirmed from real match data...)".
 2. A handful of maps additionally have a **known-good rotation hand-confirmed and built in** (see
    the table below), from back before automatic calibration existed — those take priority over #1
-   and are never recomputed.
+   and are never recomputed (including scale/pan, which stays at the manual defaults unless you set
+   them yourself — this is the one difference from a `CONFIRMED_ORIENTATIONS` entry above).
 3. For anything #1 couldn't confidently resolve, or if you just want to override it, use the **Map
    orientation** control (rotate 0/90/180/270°, plus a flip checkbox, plus the Scale/Pan sliders
    described further down) next to the facing offset to correct it by eye. It's per-map and
@@ -292,18 +308,27 @@ one moves where each dot lands, without touching the downloaded picture itself:
 |---|---|---|
 | Sunset | 90°, flipped | Matched against a player's own room-by-room read of a live match, then separately checked against 8 of 10 real player positions taken from an in-game screenshot (see below) |
 
+**Maps with a rotation confirmed from real calibration scores** (`CONFIRMED_ORIENTATIONS` in
+`viewer/app.js`) — see #1's note above for what this is and how it differs from the table just
+above (scale/pan still gets fit fresh per replay, only the rotation is pinned):
+
+| Map | Rotation | Confirmed by |
+|---|---|---|
+| Ascent | 90°, flipped | A real 24-round match's own calibration scores: 64% of recorded positions landed on the map image at this rotation, a clear ~16-point margin over the next-best candidate (51%) and every other candidate (down to 33% for the worst) — see the Debug info panel's score breakdown |
+
 **Maps where the downloaded picture itself needed rotating** (`MAP_IMAGE_ROTATIONS` in
 `viewer/app.js`) — a different, independent correction for when the minimap art as downloaded is
 just sideways/upside-down, rather than the coordinate formula disagreeing with an otherwise-correct
 picture; this one physically turns the drawn image and leaves dot positions using the plain,
 uncorrected formula:
 
-*(none confirmed yet. Ascent was tried here twice — once as a dot-position rotation, once as an
-image rotation — both a guess from a visual impression rather than a real reference point, and both
-reportedly made alignment worse, so neither is kept. Ascent (and any other map without a manual
-entry in either table) now goes through automatic calibration (#1 above) instead, which needs no
-screenshot or guess at all — check the Debug info panel's "Automatic orientation calibration" line
-after loading it.)*
+*(none confirmed yet. Ascent was tried here twice early on — once as a dot-position rotation, once
+as an image rotation — both a guess from a visual impression rather than a real reference point,
+and both reportedly made alignment worse, so neither is kept; Ascent's real, data-confirmed rotation
+lives in the `CONFIRMED_ORIENTATIONS` table above instead, which also handles its scale/pan. Any map
+without an entry in any of the three tables goes through plain automatic calibration (#1 above),
+which needs no screenshot or guess at all — check the Debug info panel's "Automatic orientation
+calibration" line after loading it.)*
 
 If you work out a good rotation for another map, add it to whichever of the two tables in `app.js`
 actually fixed it (one line) so nobody has to rediscover it — see "How to verify a map's rotation"

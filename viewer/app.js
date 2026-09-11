@@ -243,6 +243,29 @@ const AUTO_ORIENTATION_MIN_VOID_FRACTION = 0.02; // image must have at least thi
 const AUTO_ORIENTATION_TRIM = 0.01; // trim the extreme 1% of points on each side per axis before measuring the footprint's extent, so a handful of rare stray/glitched samples can't blow up the fit
 const AUTO_ORIENTATION_TARGET_HALF_EXTENT = 0.46; // fit the footprint to +/-46% from center (an ~8% margin so it doesn't touch the image edge exactly)
 
+// Rotations CONFIRMED from a real match's own calibration scores (not a visual guess) -- when a
+// map is listed here, autoDetectOrientation skips picking a winner by score among the 8 candidates
+// and instead fits scale/offset directly for this pinned (rotate, flipH) pair, using the exact same
+// per-candidate fit + opacity scoring as every other candidate (so it's still a real, data-driven
+// fit, just for a rotation that's already settled rather than re-decided every time).
+//
+// Why this table needs to exist at all, rather than just trusting AUTO_ORIENTATION_MIN_SCORE/_LEAD
+// every time: real official Valorant minimap art has plenty of transparent VOID *inside* its outer
+// silhouette too -- walls, out-of-bounds interior gaps -- not just the four corners this feature's
+// whole approach is built on. A correct rotation can legitimately still only land some fraction of
+// real recorded positions on an opaque pixel, well under what a clean synthetic test would suggest.
+// Ascent is the confirmed case so far: a real 24-round, 10-player match scored rotate=90+flip at
+// 64% -- clearly, consistently ahead of every other candidate (next-best 51%, down to 33% for the
+// worst) -- but 64% alone doesn't clear AUTO_ORIENTATION_MIN_SCORE (0.75). Rather than loosen that
+// bar for every map (risking a false-confident pick on a map with no real data backing it), this
+// pins the specific, already-demonstrated-clear answer for maps that have one.
+const CONFIRMED_ORIENTATIONS = {
+  // Ascent -- confirmed via the Debug info panel's own "Automatic orientation calibration" scores
+  // from a real match (see the doc comment above): rotate=90, flipH=true at 64%, a wide margin over
+  // every alternative. See the README's map-orientation section.
+  '7eaecc1b-4337-bbf6-6ab9-04b8f06b3319': { rotate: 90, flipH: true },
+};
+
 // mapUuid -> { rotate, flipH, score, scores } on success, or { error, scores? } when inconclusive.
 // Session-only (not persisted itself -- a successful result gets persisted like any manual choice
 // via saveMapOrientation, see maybeAutoDetectOrientation below); this cache just avoids recomputing
@@ -432,6 +455,25 @@ function autoDetectOrientation(map, image, tracks) {
   });
   scores.sort((a, b) => b.score - a.score);
 
+  // A map already confirmed via a real match's own scores (see CONFIRMED_ORIENTATIONS's doc
+  // comment) skips the confidence gate below and always uses its pinned rotation -- but still gets
+  // scale/offset fit fresh from THIS match's own recorded footprint, same as any other candidate,
+  // rather than reusing whatever scale/offset happened to be fit the first time it was confirmed.
+  const confirmed = map && map.uuid && CONFIRMED_ORIENTATIONS[map.uuid];
+  if (confirmed) {
+    const match = scores.find((s) => s.candidate.rotate === confirmed.rotate && s.candidate.flipH === confirmed.flipH);
+    return {
+      rotate: match.candidate.rotate,
+      flipH: match.candidate.flipH,
+      scale: match.fit.scale,
+      offsetX: match.fit.offsetX,
+      offsetY: match.fit.offsetY,
+      score: match.score,
+      scores,
+      confirmed: true,
+    };
+  }
+
   const best = scores[0], runnerUp = scores[1];
   if (best.score < AUTO_ORIENTATION_MIN_SCORE || best.score - runnerUp.score < AUTO_ORIENTATION_MIN_LEAD) {
     return {
@@ -504,7 +546,8 @@ function describeAutoDetection(uuid) {
   if (result.error) {
     return 'ran, inconclusive -- ' + result.error + (result.scores ? '  [' + fmtScores(result.scores) + ']' : '');
   }
-  return 'applied -- rotate=' + result.rotate + ' flipH=' + result.flipH +
+  return 'applied' + (result.confirmed ? ' (rotation pre-confirmed from real match data -- see CONFIRMED_ORIENTATIONS -- scale/offset still freshly fit)' : '') +
+    ' -- rotate=' + result.rotate + ' flipH=' + result.flipH +
     ' scale=' + result.scale.toFixed(2) +
     ' offsetX=' + (Math.round(result.offsetX * 1000) / 10).toFixed(1) + '%' +
     ' offsetY=' + (Math.round(result.offsetY * 1000) / 10).toFixed(1) + '%' +
