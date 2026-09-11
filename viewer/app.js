@@ -60,17 +60,34 @@ let facingOffsetDeg = 0;
 // than guess which maps need what, this is a live, per-map-remembered correction (same idea as
 // the facing-offset control above) applied in screen space, after the world->uv transform, so it
 // never has to touch the documented formula itself.
-const mapOrientation = { rotate: 0, flipH: false };
+// scale/offsetX/offsetY exist for a related but distinct problem: rotate/flip alone assume the
+// downloaded image's content fills the exact same [0,1] square Riot's multiplier/scalar formula
+// was calibrated against. If this specific image has different padding/cropping around the actual
+// playable area (very plausible -- valorant-api.com's "displayIcon" is a separate asset from
+// whatever Riot's own client renders internally, not guaranteed pixel-identical), everything can
+// end up pointed the right general direction after rotate/flip but still land off-center relative
+// to the actual rooms -- scale zooms in/out around the image center, offsetX/offsetY pan, both in
+// normalized [0,1] units, to compensate.
+const mapOrientation = { rotate: 0, flipH: false, scale: 1, offsetX: 0, offsetY: 0 };
 
 function orientationStorageKey(mapUuid) { return 'vrf-map-orientation:' + mapUuid; }
 
+function defaultOrientation() { return { rotate: 0, flipH: false, scale: 1, offsetX: 0, offsetY: 0 }; }
+
 function loadMapOrientation(mapUuid) {
+  const fallback = defaultOrientation();
   try {
     const raw = mapUuid ? localStorage.getItem(orientationStorageKey(mapUuid)) : null;
-    if (!raw) return { rotate: 0, flipH: false };
+    if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    return { rotate: Number(parsed.rotate) || 0, flipH: !!parsed.flipH };
-  } catch { return { rotate: 0, flipH: false }; }
+    return {
+      rotate: Number(parsed.rotate) || 0,
+      flipH: !!parsed.flipH,
+      scale: Number(parsed.scale) || 1,
+      offsetX: Number(parsed.offsetX) || 0,
+      offsetY: Number(parsed.offsetY) || 0,
+    };
+  } catch { return fallback; }
 }
 
 function saveMapOrientation(mapUuid) {
@@ -79,9 +96,10 @@ function saveMapOrientation(mapUuid) {
   catch { /* private-mode / storage disabled -- orientation just won't be remembered next time */ }
 }
 
-/** Rotates/flips a normalized (u,v) point in [0,1] around the image center. Screen-space only --
- * independent of worldToUv's world-unit math, so it corrects mismatched minimap art without
- * needing to touch (or understand) Riot's own coordinate formula. */
+/** Rotates/flips/scales/pans a normalized (u,v) point in [0,1]. Screen-space only -- independent
+ * of worldToUv's world-unit math, so it corrects mismatched minimap art without needing to touch
+ * (or understand) Riot's own coordinate formula. Order matters: flip and rotate first (they're
+ * about the image's orientation), then scale and pan (they're about the image's crop/framing). */
 function applyOrientation(u, v) {
   let x = u - 0.5, y = v - 0.5;
   if (mapOrientation.flipH) x = -x;
@@ -91,6 +109,11 @@ function applyOrientation(u, v) {
     case 270: { const nx = y, ny = -x; x = nx; y = ny; break; }
     default: break;
   }
+  const scale = mapOrientation.scale || 1;
+  x *= scale;
+  y *= scale;
+  x += mapOrientation.offsetX || 0;
+  y += mapOrientation.offsetY || 0;
   return { u: x + 0.5, v: y + 0.5 };
 }
 
@@ -249,6 +272,10 @@ const visionToggle = document.getElementById('visionToggle');
 const facingOffsetInput = document.getElementById('facingOffset');
 const mapRotateSelect = document.getElementById('mapRotate');
 const mapFlipCheckbox = document.getElementById('mapFlip');
+const mapScaleInput = document.getElementById('mapScale');
+const mapOffsetXInput = document.getElementById('mapOffsetX');
+const mapOffsetYInput = document.getElementById('mapOffsetY');
+const btnResetOrientation = document.getElementById('btnResetOrientation');
 const debugPanel = document.getElementById('debugPanel');
 const debugText = document.getElementById('debugText');
 const btnCopyDebug = document.getElementById('btnCopyDebug');
@@ -398,19 +425,50 @@ function applyLoadedOrientation() {
   const loaded = loadMapOrientation(state.map && state.map.uuid);
   mapOrientation.rotate = loaded.rotate;
   mapOrientation.flipH = loaded.flipH;
+  mapOrientation.scale = loaded.scale;
+  mapOrientation.offsetX = loaded.offsetX;
+  mapOrientation.offsetY = loaded.offsetY;
   mapRotateSelect.value = String(loaded.rotate);
   mapFlipCheckbox.checked = loaded.flipH;
+  mapScaleInput.value = String(loaded.scale);
+  mapOffsetXInput.value = String(Math.round(loaded.offsetX * 100));
+  mapOffsetYInput.value = String(Math.round(loaded.offsetY * 100));
+}
+
+function onOrientationControlChanged() {
+  saveMapOrientation(state.map && state.map.uuid);
+  if (state.tracks.length > 0) logSpawnDebugInfo();
 }
 
 mapRotateSelect.addEventListener('change', () => {
   mapOrientation.rotate = Number(mapRotateSelect.value) || 0;
-  saveMapOrientation(state.map && state.map.uuid);
-  if (state.tracks.length > 0) logSpawnDebugInfo();
+  onOrientationControlChanged();
 });
 mapFlipCheckbox.addEventListener('change', () => {
   mapOrientation.flipH = mapFlipCheckbox.checked;
-  saveMapOrientation(state.map && state.map.uuid);
-  if (state.tracks.length > 0) logSpawnDebugInfo();
+  onOrientationControlChanged();
+});
+mapScaleInput.addEventListener('change', () => {
+  mapOrientation.scale = Number(mapScaleInput.value) || 1;
+  onOrientationControlChanged();
+});
+mapOffsetXInput.addEventListener('change', () => {
+  mapOrientation.offsetX = (Number(mapOffsetXInput.value) || 0) / 100;
+  onOrientationControlChanged();
+});
+mapOffsetYInput.addEventListener('change', () => {
+  mapOrientation.offsetY = (Number(mapOffsetYInput.value) || 0) / 100;
+  onOrientationControlChanged();
+});
+btnResetOrientation.addEventListener('click', () => {
+  const fresh = defaultOrientation();
+  Object.assign(mapOrientation, fresh);
+  mapRotateSelect.value = '0';
+  mapFlipCheckbox.checked = false;
+  mapScaleInput.value = '1';
+  mapOffsetXInput.value = '0';
+  mapOffsetYInput.value = '0';
+  onOrientationControlChanged();
 });
 
 function loadMapImage() {
@@ -481,7 +539,8 @@ function logSpawnDebugInfo() {
   lines.push('Map: ' + state.map.displayName);
   lines.push('xMultiplier=' + state.map.xMultiplier + '  yMultiplier=' + state.map.yMultiplier +
     '  xScalarToAdd=' + state.map.xScalarToAdd + '  yScalarToAdd=' + state.map.yScalarToAdd);
-  lines.push('Map orientation control: rotate=' + mapOrientation.rotate + '  flipH=' + mapOrientation.flipH);
+  lines.push('Map orientation control: rotate=' + mapOrientation.rotate + '  flipH=' + mapOrientation.flipH +
+    '  scale=' + mapOrientation.scale + '  offsetX=' + mapOrientation.offsetX + '  offsetY=' + mapOrientation.offsetY);
   lines.push('');
   lines.push('Spawn-frame positions (u/v should be within 0..1 to land on the map image):');
   lines.push(['player', 'PosX', 'PosY', 'u', 'v', 'insideImage'].join('\t'));

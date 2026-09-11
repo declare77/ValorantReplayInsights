@@ -174,6 +174,16 @@ to correct it by eye — try each rotation until the two teams land on the corre
 per-map and remembered in your browser (`localStorage`) once set, so you only need to set it once
 per map, ever.
 
+If positions are pointed in the right general direction but still look off-center — clipping into
+walls that aren't near the real spawn, or drifting away from the correct rooms as the round goes
+on — that's a different problem from orientation: the rotate/flip controls assume the downloaded
+map image's content fills the exact same square Riot's coordinate formula was calibrated against,
+and that's not guaranteed (valorant-api.com's `displayIcon` is a separate asset, not necessarily
+pixel-identical to whatever the game client itself renders internally). The **Scale** and **Pan
+X%/Y%** controls next to Map orientation compensate for that — Scale zooms in/out around the image
+center, the two Pan fields shift it — also remembered per map, with a **Reset** button to get back
+to defaults (0° rotation, no flip, scale 1, no pan) if you want to start over.
+
 If you're not sure the transform itself is right (positions clipping into walls, or way off the
 map entirely), open the **Debug info** panel below the roster after loading a match — it lists
 every player's first recorded position and the exact normalized coordinate the map transform

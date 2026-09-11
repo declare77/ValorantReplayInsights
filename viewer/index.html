@@ -96,6 +96,15 @@
       </select>
       <input type="checkbox" id="mapFlip"> Flip
     </label>
+    <label class="check" title="Fixes positions landing off-center once the orientation above is otherwise correct -- the downloaded map image's crop/margins may not exactly match what the position formula assumes. Scale zooms around the image center; the offsets pan it. Remembered per map.">
+      Scale
+      <input type="number" id="mapScale" value="1" step="0.02" min="0.1" style="width:4.5em">
+      Pan X%
+      <input type="number" id="mapOffsetX" value="0" step="1" style="width:4em">
+      Pan Y%
+      <input type="number" id="mapOffsetY" value="0" step="1" style="width:4em">
+      <button id="btnResetOrientation" type="button" title="Reset orientation/scale/pan for this map back to defaults">Reset</button>
+    </label>
   </div>
 </footer>
 
