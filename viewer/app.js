@@ -43,15 +43,23 @@ const TEAM_COLOR_DEFEND = '#4ade80';
 // replay data (vrfkit doesn't carry a buy-phase-length field; RoundInfo.StartTimeMs is the
 // `roundStarted` event, which per the C# project's own AbilityCastBuilder remarks fires at the
 // START of freeze time, not when players are actually free to move -- see freezeTimeMsForRound()
-// and playableStartMs() below, which correct for this). Only rounds 1 and 13 (first round of each
-// regulation half) are known to differ from the standard 30s -- overtime rounds (25+) are NOT
-// covered here since their freeze time wasn't specified; they'll be (possibly incorrectly) treated
-// as a normal 30s round until confirmed otherwise.
+// and playableStartMs() below, which correct for this). Only the first round of each regulation
+// half is known to differ from the standard 30s -- overtime rounds (25+) are NOT covered here
+// since their freeze time wasn't specified; they'll be (possibly incorrectly) treated as a normal
+// 30s round until confirmed otherwise.
+//
+// RoundInfo.RoundNumber (from the roundStarted event's raw Word0) is 0-indexed -- confirmed by a
+// real replay showing "Round 0" as its first round in this viewer, which is not how VALORANT
+// itself ever numbers a round (it always shows "ROUND 1" first). So "the first round of the
+// match" is raw round 0, and "the first round of the second half" is raw round 12 -- NOT 1 and 13,
+// which is what those mean only once shifted for display (see roundNumberForDisplay() below,
+// which is the ONLY place that shift should ever happen -- every internal join/lookup here keys
+// off the raw, unshifted RoundNumber, same as the C# side).
 const FREEZE_TIME_MS_FIRST_OF_HALF = 45000;
 const FREEZE_TIME_MS_DEFAULT = 30000;
 
-function freezeTimeMsForRound(roundNumber) {
-  return (roundNumber === 1 || roundNumber === 13) ? FREEZE_TIME_MS_FIRST_OF_HALF : FREEZE_TIME_MS_DEFAULT;
+function freezeTimeMsForRound(rawRoundNumber) {
+  return (rawRoundNumber === 0 || rawRoundNumber === 12) ? FREEZE_TIME_MS_FIRST_OF_HALF : FREEZE_TIME_MS_DEFAULT;
 }
 
 /** The moment freeze time actually ends and players can move/shoot/plant -- as opposed to
@@ -59,6 +67,14 @@ function freezeTimeMsForRound(roundNumber) {
  * directly, anywhere "round start" is meant in the gameplay sense. */
 function playableStartMs(round) {
   return round.StartTimeMs + freezeTimeMsForRound(round.RoundNumber);
+}
+
+/** RoundInfo.RoundNumber is 0-indexed internally (see the comment above) -- this is the one
+ * place that turns it into the 1-indexed number VALORANT itself shows players ("Round 1", not
+ * "Round 0"). Every UI string that shows a round number to the person should go through this,
+ * rather than using round.RoundNumber directly. */
+function roundNumberForDisplay(rawRoundNumber) {
+  return rawRoundNumber + 1;
 }
 
 const UTILITY_COLORS = {
@@ -689,6 +705,53 @@ function logSpawnDebugInfo() {
     lines.push([r.player, r.PosX, r.PosY, r.u, r.v, r.insideImage].join('\t'));
   }
 
+  // Utility markers (state.utility, from utility.json) -- added to help pin down "still shows up
+  // at spawn" reports without another round of CLI dump-* commands. Sorted by distance to the
+  // nearest player's spawn point (closest first): a marker still stuck at spawn should sit at or
+  // very near distance 0. A marker whose SpawnTimeMs is near 0 and whose DespawnTimeMs never
+  // arrives (open for the whole match) is the same shape as the AggroBot_PC / Ability_* container
+  // bugs already fixed -- some other persistent, per-player container actor is the next suspect if
+  // this list still shows one sitting at a spawn point after those fixes.
+  const spawnPoints = rows.map((r) => ({ x: r.PosX, y: r.PosY }));
+  function distToNearestSpawn(x, y) {
+    if (spawnPoints.length === 0 || x == null || y == null) return null;
+    let best = Infinity;
+    for (const p of spawnPoints) {
+      const d = Math.hypot(x - p.x, y - p.y);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+  const utilityRows = (state.utility || []).map((u) => {
+    const uv = (u.X != null && u.Y != null) ? worldToUv(u.X, u.Y, state.map) : null;
+    const dist = distToNearestSpawn(u.X, u.Y);
+    return {
+      ClassPath: u.ClassPath || '(none)',
+      Category: u.Category,
+      X: u.X != null ? Number(u.X.toFixed(1)) : null,
+      Y: u.Y != null ? Number(u.Y.toFixed(1)) : null,
+      u: uv ? Number(uv.u.toFixed(4)) : null,
+      v: uv ? Number(uv.v.toFixed(4)) : null,
+      insideImage: uv ? (uv.u >= 0 && uv.u <= 1 && uv.v >= 0 && uv.v <= 1) : null,
+      distToNearestSpawn: dist != null ? Number(dist.toFixed(1)) : null,
+      SpawnTimeMs: u.SpawnTimeMs,
+      DespawnTimeMs: u.DespawnTimeMs == null ? '(never closes)' : u.DespawnTimeMs,
+      activeAtPlayhead: u.SpawnTimeMs != null && state.currentTimeMs >= u.SpawnTimeMs &&
+        (u.DespawnTimeMs == null || state.currentTimeMs < u.DespawnTimeMs),
+    };
+  }).sort((a, b) => (a.distToNearestSpawn == null ? Infinity : a.distToNearestSpawn) -
+    (b.distToNearestSpawn == null ? Infinity : b.distToNearestSpawn));
+
+  lines.push('');
+  lines.push('Utility markers (state.utility), closest to a player spawn point first -- ' +
+    utilityRows.length + ' total, current playhead ' + state.currentTimeMs + 'ms:');
+  lines.push(['ClassPath', 'Category', 'X', 'Y', 'u', 'v', 'insideImage', 'distToNearestSpawn',
+    'SpawnTimeMs', 'DespawnTimeMs', 'activeAtPlayhead'].join('\t'));
+  for (const r of utilityRows) {
+    lines.push([r.ClassPath, r.Category, r.X, r.Y, r.u, r.v, r.insideImage, r.distToNearestSpawn,
+      r.SpawnTimeMs, r.DespawnTimeMs, r.activeAtPlayhead].join('\t'));
+  }
+
   debugText.value = lines.join('\n');
   debugPanel.hidden = false;
 }
@@ -747,7 +810,7 @@ function buildChapters() {
     const freezeBtn = document.createElement('button');
     freezeBtn.className = 'chapter chapter-freeze';
     freezeBtn.style.flex = '0 0 ' + freezeWidthPct + '%';
-    freezeBtn.title = 'Round ' + r.RoundNumber + ' -- freeze time (buy phase)';
+    freezeBtn.title = 'Round ' + roundNumberForDisplay(r.RoundNumber) + ' -- freeze time (buy phase)';
     freezeBtn.dataset.round = String(r.RoundNumber);
     freezeBtn.onclick = () => { state.currentTimeMs = r.StartTimeMs; updateTimeUi(); };
     chaptersEl.appendChild(freezeBtn);
@@ -757,8 +820,8 @@ function buildChapters() {
     const btn = document.createElement('button');
     btn.className = 'chapter';
     btn.style.flex = '0 0 ' + roundWidthPct + '%';
-    btn.textContent = 'R' + r.RoundNumber;
-    btn.title = 'Round ' + r.RoundNumber + ' -- jumps to end of freeze time, not the buy phase start';
+    btn.textContent = 'R' + roundNumberForDisplay(r.RoundNumber);
+    btn.title = 'Round ' + roundNumberForDisplay(r.RoundNumber) + ' -- jumps to end of freeze time, not the buy phase start';
     btn.dataset.round = String(r.RoundNumber);
     // Jump to when the round is actually playable, not the raw roundStarted (freeze-time-start)
     // timestamp -- see playableStartMs().
@@ -826,7 +889,7 @@ function updateTimeUi() {
     const roundClock = relativeMs < 0
       ? ('freeze ' + formatClock(-relativeMs) + ' left')
       : formatClock(relativeMs);
-    roundLabel.textContent = 'Round ' + round.RoundNumber + ' · ' + roundClock;
+    roundLabel.textContent = 'Round ' + roundNumberForDisplay(round.RoundNumber) + ' · ' + roundClock;
   } else {
     roundLabel.textContent = '';
   }

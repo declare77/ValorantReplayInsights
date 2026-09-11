@@ -235,6 +235,15 @@ computes from it, with a "Copy debug info" button so you can hand that straight 
 troubleshooting it, no developer tools required. It also now says whether team sides (below) were
 resolved for that particular replay.
 
+The same panel also lists every entry in `state.utility` (from `utility.json`) — class path,
+category, world/normalized position, spawn/despawn time, and whether it's active at the current
+scrubber position — sorted by distance to the nearest player's spawn point, closest first. This
+was added specifically to chase down "utility marker stuck at spawn" reports without another round
+of CLI `dump-*` commands: a marker that's still misclassified as a real ability effect (the same
+shape as the `AggroBot_PC` and `Ability_*` container bugs described further down, under "Also
+fixed..."/"A second, separate cause...") reliably sorts to the top of this list, sitting at ~0
+distance from a spawn point with `SpawnTimeMs` near 0 and `DespawnTimeMs` that never arrives.
+
 ### Team colors (attack = red, defense = green)
 
 Players are colored by side rather than one arbitrary color each. There's no single field
@@ -278,15 +287,27 @@ on death, same as before this feature existed.
 vrfkit's `roundStarted` event — and so `RoundInfo.StartTimeMs`, from the C# side's
 `RoundTimelineBuilder` — fires at the *start* of freeze time (the buy phase), not the moment
 players are actually free to move. The viewer accounts for this: `playableStartMs()` in
-`viewer/app.js` adds a freeze-time length on top of that raw timestamp — 45s for rounds 1 and 13
-(the first round of each regulation half), 30s otherwise, per VALORANT's standard rules — and
-that's what "Round N" navigation (the round chapters, restart/next-round buttons, and the "Round N
-· 0:00" readout next to the scrubber) is actually anchored to, not the raw `roundStarted` moment.
-Scrub to a time still inside freeze time and the readout shows a countdown (e.g. `freeze 0:12
-left`) instead of a round-elapsed time, so it's visually obvious you're still in the buy phase.
+`viewer/app.js` adds a freeze-time length on top of that raw timestamp — 45s for the first round of
+each regulation half, 30s otherwise, per VALORANT's standard rules — and that's what "Round N"
+navigation (the round chapters, restart/next-round buttons, and the "Round N · 0:00" readout next
+to the scrubber) is actually anchored to, not the raw `roundStarted` moment. Scrub to a time still
+inside freeze time and the readout shows a countdown (e.g. `freeze 0:12 left`) instead of a
+round-elapsed time, so it's visually obvious you're still in the buy phase.
 
-This is **not confirmed for overtime rounds** (25+) — only rounds 1 and 13 were specified, so an OT
-round is treated as a normal 30s round until someone confirms otherwise from a real OT replay.
+**`RoundInfo.RoundNumber` is 0-indexed**, not 1-indexed: it comes straight from the `roundStarted`
+event's raw `Word0`, and a real replay showed "Round 0" as its first round before this was
+accounted for — VALORANT itself never numbers a round starting at 0, so the raw value needs a `+1`
+shift purely for display. Concretely, the match's first round is raw round `0` (not `1`), and the
+first round of the second half is raw round `12` (not `13`) — those are the two rounds
+`freezeTimeMsForRound()` gives the 45s treatment to. Every internal lookup/join in `viewer/app.js`
+(and on the C# side) keys off the raw, unshifted number the whole way through; `roundNumberForDisplay()`
+in `viewer/app.js` (`rawRoundNumber + 1`) is the *only* place that shift happens, applied right at
+the handful of spots that put a round number on screen (chapter button labels/titles, the
+`roundLabel` readout) — so "Round 1" is what you'll actually see for the match's first round.
+
+This is **not confirmed for overtime rounds** (raw 24+, displayed as 25+) — only the first round of
+each regulation half was specified, so an OT round is treated as a normal 30s round until someone
+confirms otherwise from a real OT replay.
 
 The round chapters bar reflects the same split: each round is two adjacent buttons now, not one —
 a small, dim, unlabeled freeze-time segment (dashed border) sized to its actual 30s/45s length,
