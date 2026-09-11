@@ -40,6 +40,8 @@
       <div id="mapOverlayMessage" class="overlay-message"></div>
     </div>
     <div id="legend">
+      <span class="legend-item" id="legendAttack" hidden><i class="swatch" style="background:#ff4d4d"></i>Attacking</span>
+      <span class="legend-item" id="legendDefend" hidden><i class="swatch" style="background:#4ade80"></i>Defending</span>
       <span class="legend-item"><i class="swatch" style="background:rgba(200,200,200,0.85)"></i>Smoke</span>
       <span class="legend-item"><i class="swatch" style="background:rgba(255,120,40,0.85)"></i>Molly / incendiary</span>
       <span class="legend-item"><i class="swatch" style="background:rgba(180,120,255,0.9)"></i>Wall</span>
@@ -104,12 +106,12 @@
     </label>
     <label class="check" title="Pans the map left/right relative to the position data, after scale/orientation. Remembered per map.">
       Pan X
-      <input type="range" id="mapOffsetX" value="0" min="-50" max="50" step="1">
+      <input type="range" id="mapOffsetX" value="0" min="-50" max="50" step="0.1">
       <span class="sliderValue" id="mapOffsetXValue">0%</span>
     </label>
     <label class="check" title="Pans the map up/down relative to the position data, after scale/orientation. Remembered per map.">
       Pan Y
-      <input type="range" id="mapOffsetY" value="0" min="-50" max="50" step="1">
+      <input type="range" id="mapOffsetY" value="0" min="-50" max="50" step="0.1">
       <span class="sliderValue" id="mapOffsetYValue">0%</span>
     </label>
     <button id="btnResetOrientation" type="button" title="Reset scale/pan to 0, and rotation/flip to this map's known-good default if one is built in, otherwise 0/none">Reset map fit</button>

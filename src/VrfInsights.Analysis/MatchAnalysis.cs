@@ -24,6 +24,10 @@ public sealed class MatchAnalysis
     public required IReadOnlyList<PlayerIdentity> Players { get; init; }
     public required IReadOnlyList<RoundInfo> Rounds { get; init; }
     public required IReadOnlyList<MatchEvent> Events { get; init; }
+    /// <summary>Per-round attacker/defender rosters (see <see cref="Rounds.TeamSideResolver"/>) --
+    /// empty when the replay didn't have enough evidence to determine sides, in which case a
+    /// viewer should fall back to per-player coloring rather than guessing.</summary>
+    public required IReadOnlyList<RoundSides> Sides { get; init; }
     public required IReadOnlyList<PlayerTrack> MovementTracks { get; init; }
     public required IReadOnlyList<PersistentEffectEvent> Utility { get; init; }
     public required IReadOnlyList<AbilityCastEvent> AbilityCasts { get; init; }
@@ -50,6 +54,7 @@ public sealed class MatchAnalysis
             Players = players,
             Rounds = rounds,
             Events = events,
+            Sides = TeamSideResolver.Build(export, players, rounds, events),
             MovementTracks = tracks,
             Utility = UtilityTimelineBuilder.Build(export.Actors),
             AbilityCasts = AbilityCastBuilder.Build(export.Fields),

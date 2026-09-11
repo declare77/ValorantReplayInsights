@@ -159,6 +159,8 @@ What it draws, and how honestly-approximate each part is:
 | Smoke/molly circle size, wall line length | Fixed constants in `app.js` | Visual approximation — the replay only gives a spawn point (and, for a wall, a spawn yaw), never a size |
 | Ability-cast flash | `ability_casts.json`'s `FirstObservedAtMs` | Approximate timing, see the CastTime caveat above |
 | Vision cones (optional toggle) | `vision_cones.json`, if you ran `analyze --with-vision` | Same derived approximation described below |
+| Player/roster color (attack = red, defense = green) | `match.json`'s `Sides` (`TeamSideResolver.cs`) | Derived from two independently-verified signals, not guessed — see "Team colors" below. Falls back to one arbitrary color per player if it couldn't be determined for a given match |
+| Death marker (X where a player died) | `events.json`'s `characterDeath` rows | Exact death time and NetGUID (vrfkit-verified); the marker position is this viewer's own interpolation of `movement.json` at that timestamp, same as live positions |
 
 If a facing arrow looks rotated or mirrored on a particular map, use the **Facing offset°**
 control in the viewer rather than assuming the position data itself is wrong — that's the one
@@ -193,7 +195,9 @@ exact same square Riot's coordinate formula was calibrated against (valorant-api
 renders internally). The **Scale** and **Pan X%/Y%** controls next to Map orientation compensate
 for that — Scale zooms in/out around the image center, the two Pan fields shift it — also
 remembered per map. In practice this tends to be a small correction (a few percent), not the main
-source of misalignment — get rotation right first.
+source of misalignment — get rotation right first. The Pan sliders move in tenths of a percent
+(not whole percent), since a full 1% step moved players much further than intended for a
+fine-tuning control.
 
 **How to verify a map's rotation**, if you want more confidence than "the two teams are on the
 right side": take a screenshot of the in-game minimap at a moment where you can positively identify
@@ -217,7 +221,46 @@ If you're not sure the transform itself is right (positions clipping into walls,
 map entirely), open the **Debug info** panel below the roster after loading a match — it lists
 every player's first recorded position and the exact normalized coordinate the map transform
 computes from it, with a "Copy debug info" button so you can hand that straight to whoever's
-troubleshooting it, no developer tools required.
+troubleshooting it, no developer tools required. It also now says whether team sides (below) were
+resolved for that particular replay.
+
+### Team colors (attack = red, defense = green)
+
+Players are colored by side rather than one arbitrary color each. There's no single field
+anywhere in vrfkit's tables that just says "this player is attacking this round" (checked against
+vrfkit's own `docs/DATA.md` — nothing marked verified there covers per-player side), so rather than
+inventing a heuristic and hoping — the mistake the old map-calibration feature made — this combines
+two things that vrfkit's own docs *do* independently verify:
+
+1. **Team roster** (which players are on the same team) never changes during a match, only which
+   side of the map — and therefore attack/defense role — a team plays, which flips at
+   halftime/overtime (`events.switchTeams`, vrfkit-verified). The two teams' round-1 spawn points
+   are always in the two separate spawn rooms at opposite ends of the map, so grouping players by
+   which of two far-apart spawn clusters they're in reliably recovers the roster split without any
+   per-map calibration data.
+2. **Spike custody** (`BombEquippable_C.Owner`, the same signal vrfkit's own
+   `tools/extract_spike_carrier.py` uses to find the planter) is direct evidence of who held the
+   bomb — and only attackers can ever hold it. One resolved pickup during a round tells you that
+   player's whole roster group was attacking that round; that's then applied to every round in the
+   same half, since sides only change at `switchTeams`.
+
+This is implemented in `TeamSideResolver.cs` (`VrfInsights.Analysis/Rounds/`) and covered by unit
+tests in `TeamSideResolverTests.cs` using synthetic fixtures (this sandbox has no real `.vrf` or
+exported Parquet sample to validate against — see "Honesty about what's verified vs. assumed"
+below). If a replay doesn't have enough evidence for either signal (very little of the match
+decoded, or the bomb was never picked up), `match.json`'s `Sides` array comes back empty and the
+viewer quietly falls back to one arbitrary color per player instead of guessing sides — the
+**Debug info** panel says which happened for a given replay.
+
+### Death markers
+
+When a player dies, their live icon disappears and a team-colored **X** appears at the exact spot
+they died, for the rest of that round — scrub backward past their death and they reappear alive,
+same as before. This reads `events.json`'s `characterDeath` rows, which vrfkit's docs confirm carry
+the killed player's *character pawn* NetGUID — exactly the same ID `movement.json` is already keyed
+by, so no extra identity resolution was needed. `events.json` is optional in the file picker (older
+output folders that predate this feature won't have it); without it, players simply don't disappear
+on death, same as before this feature existed.
 
 ## Project layout
 
@@ -225,7 +268,8 @@ troubleshooting it, no developer tools required.
   `net_guids`, `events`) and `manifest.json` into typed row/manifest models. No business logic.
 - **`VrfInsights.Analysis`** — everything derived: player identity (joining `manifest.players` to
   `game_specific_data`'s `playerLoadouts`), movement tracks, vision cones (computed — VALORANT's
-  replay doesn't carry a "vision cone" field, see below), round timeline, utility/persistent-effect
+  replay doesn't carry a "vision cone" field, see below), round timeline, per-round attack/defense
+  sides (`Rounds/TeamSideResolver.cs` — see "Team colors" above), utility/persistent-effect
   lifecycle, ability casts, combat interactions, economy, and best-effort map detection
   (`Identity/MapDetector.cs` + `Identity/MapCatalog.cs`, against Riot's own map list).
 - **`VrfInsights.Pipeline`** — shells out to `vrfkit.exe` (`VrfkitExportRunner`) and runs the
@@ -240,7 +284,8 @@ troubleshooting it, no developer tools required.
 - **`VrfInsights.Gui`** — a small hand-built WinForms app (`net10.0-windows`) on top of
   `VrfInsights.Pipeline`, for people who'd rather click buttons than type CLI flags.
 - **`VrfInsights.Tests`** — xUnit tests for the pure-logic pieces (array-flattening pivot, vision
-  cone geometry, round/event attribution, utility open/dormant/close state machine).
+  cone geometry, round/event attribution, team-side resolution, utility open/dormant/close state
+  machine).
 - **`viewer/`** — the 2D replay viewer (plain HTML/CSS/JS, no build step); see above.
 - **`scripts/Fetch-Assets.ps1`** — downloads the viewer's map/agent art from valorant-api.com.
 
@@ -276,6 +321,13 @@ What's schema-verified against vrfkit's own documentation and source (`docs/USAG
   `DidKill`, `AssistType`, `bIsWallPen`).
 - `MoneyManagementComponent`'s `Money` / `StartOfRoundMoney` / `TotalMoneyGranted`.
 - The `actors.parquet` open/dormant/close lifecycle semantics (dormant ≠ despawn).
+- `events.characterDeath`'s `(word0, word1)` = `(killer, killed)`, and both are *character pawn*
+  NetGUIDs — the same ID `movement.parquet`/`PlayerIdentity.CharacterNetGuid` already use, per
+  vrfkit's own `docs/KILL_LEDGER.md` ("The character-death words reference character pawns").
+- `BombEquippable_C.Owner` writes name the carrying character pawn's NetGUID directly (or, for a
+  proxy actor like Gekko's Wingman, via that actor's own `Instigator` field) — the same signal
+  vrfkit's own `tools/extract_spike_carrier.py` uses to find the planter, per `docs/DATA.md`'s
+  "Spike carrier"/"Planter" rows.
 
 What's a documented **assumption**, flagged in code comments, and worth checking with
 `dump-fields`/`dump-classes` against your own export before trusting:
@@ -302,6 +354,13 @@ What's a documented **assumption**, flagged in code comments, and worth checking
   confirmed "this field means the map." Comes back `null` (never a wrong guess) when nothing
   matches, and `match.json`'s `Map` field is null in that case — the viewer then asks you to pick
   the map yourself rather than assuming one.
+- `TeamSideResolver`'s team-roster split (which players are grouped together, as opposed to which
+  side is attacking — see "Team colors" above) comes from clustering round-1 spawn positions into
+  two groups by distance. This is this project's own geometric method, not something vrfkit
+  documents directly — a reasonable bet since the two teams' spawn rooms are always far apart on
+  every map, but nothing stops an unusual export from having incomplete spawn data. It returns no
+  sides at all for a match rather than a wrong split when spawn data is missing or too sparse to
+  cluster.
 - The map coordinate transform (`xMultiplier`/`yMultiplier`/`xScalarToAdd`/`yScalarToAdd` in
   `Identity/maps.json`) is Riot's own published formula from valorant-api.com, used exactly as
   published — not reverse-engineered — but not independently pixel-checked here against a real

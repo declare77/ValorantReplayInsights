@@ -25,10 +25,19 @@
 
 const REQUIRED_FILES = ['match.json', 'movement.json'];
 
+// Fallback only -- used per-player when a round's attack/defense side isn't known (see
+// TEAM_COLOR_ATTACK/TEAM_COLOR_DEFEND below, which take priority whenever match.json's `Sides`
+// covers the current round).
 const PLAYER_COLORS = [
   '#4d9fff', '#ff5c5c', '#4ade80', '#facc15', '#c084fc',
   '#22d3ee', '#fb923c', '#f472b6', '#a3e635', '#94a3b8',
 ];
+
+// Attacker/defender colors -- used whenever the analysis pipeline could work out which side a
+// player was on for the current round (see the C# project's TeamSideResolver). Falls back to
+// PLAYER_COLORS above for a match/round where that couldn't be determined.
+const TEAM_COLOR_ATTACK = '#ff4d4d';
+const TEAM_COLOR_DEFEND = '#4ade80';
 
 const UTILITY_COLORS = {
   Smoke: 'rgba(200,200,200,0.55)',
@@ -153,6 +162,7 @@ const state = {
   utility: [],
   abilityCasts: [],
   visionCones: null,
+  events: [],
 
   map: null,       // normalized {uuid, displayName, xMultiplier, yMultiplier, xScalarToAdd, yScalarToAdd}
   mapImage: null,
@@ -165,6 +175,10 @@ const state = {
 
   playerColor: new Map(),
   playerAgentImage: new Map(),
+  playerByKey: new Map(),
+  // playerKey -> Map(roundNumber -> { TimeMs, X, Y }), built from characterDeath events. See
+  // buildDeathMarkers().
+  deaths: new Map(),
 };
 
 // ---------------------------------------------------------------------------
@@ -276,6 +290,8 @@ const mapOverlay = document.getElementById('mapOverlayMessage');
 const mapPicker = document.getElementById('mapPicker');
 const mapSelect = document.getElementById('mapSelect');
 const roster = document.getElementById('roster');
+const legendAttack = document.getElementById('legendAttack');
+const legendDefend = document.getElementById('legendDefend');
 
 const chaptersEl = document.getElementById('chapters');
 const scrubber = document.getElementById('scrubber');
@@ -332,6 +348,9 @@ fileInput.addEventListener('change', async (e) => {
     state.utility = await readOptional('utility.json', []);
     state.abilityCasts = await readOptional('ability_casts.json', []);
     state.visionCones = await readOptional('vision_cones.json', null);
+    // Optional (older output folders may predate this file) -- only used to find each player's
+    // death time/location per round so drawPlayers() can show a death marker instead of a live icon.
+    state.events = await readOptional('events.json', []);
   } catch (err) {
     loadStatus.textContent = "Couldn't read one of those files as JSON: " + err.message;
     return;
@@ -359,8 +378,13 @@ function initializeFromLoadedData() {
   btnPlayPause.textContent = '▶';
 
   assignPlayerColors();
+  buildDeathMarkers();
+  const hasSides = (state.match.Sides || []).length > 0;
+  legendAttack.hidden = !hasSides;
+  legendDefend.hidden = !hasSides;
   resolveMap();
   buildRoster();
+  lastRosterRound = findRoundAt(state.match.Rounds || [], state.currentTimeMs)?.RoundNumber ?? null;
   buildChapters();
   logSpawnDebugInfo();
 
@@ -380,12 +404,64 @@ function initializeFromLoadedData() {
 function assignPlayerColors() {
   state.playerColor.clear();
   state.playerAgentImage.clear();
+  state.playerByKey.clear();
   const players = state.match.Players || [];
   players.forEach((p, idx) => {
     const key = playerKey(p);
     state.playerColor.set(key, PLAYER_COLORS[idx % PLAYER_COLORS.length]);
     state.playerAgentImage.set(key, agentImageFor(p));
+    state.playerByKey.set(key, p);
   });
+}
+
+/** Attack/defense color for a player in a given round, from match.json's `Sides` (see the C#
+ * project's TeamSideResolver) -- null if that round's side isn't known, so callers fall back to
+ * the individual per-player color. */
+function teamColorForRound(actorNetGuid, roundNumber) {
+  if (roundNumber == null) return null;
+  const sides = (state.match.Sides || []).find((s) => s.RoundNumber === roundNumber);
+  if (!sides) return null;
+  if (sides.AttackingActorNetGuids && sides.AttackingActorNetGuids.includes(actorNetGuid)) return TEAM_COLOR_ATTACK;
+  if (sides.DefendingActorNetGuids && sides.DefendingActorNetGuids.includes(actorNetGuid)) return TEAM_COLOR_DEFEND;
+  return null;
+}
+
+function colorForPlayer(player, roundNumber) {
+  return teamColorForRound(player.ActorNetGuid, roundNumber) || state.playerColor.get(playerKey(player)) || '#ffffff';
+}
+
+/** Builds state.deaths from events.json's `characterDeath` rows: Word1 is the killed character
+ * pawn's NetGUID (vrfkit docs: "the character-death words reference character pawns"), which is
+ * exactly PlayerIdentity.CharacterNetGuid -- the same join key movement/tracks already use, so no
+ * extra PlayerState-vs-pawn resolution is needed. Each round gets at most one death per player
+ * (they respawn next round), stored with their exact position at the moment they died. */
+function buildDeathMarkers() {
+  state.deaths = new Map();
+
+  const charGuidToKey = new Map();
+  const charGuidToSamples = new Map();
+  for (const track of state.tracks) {
+    const guid = track.Player && track.Player.CharacterNetGuid;
+    if (guid != null) {
+      charGuidToKey.set(guid, playerKey(track.Player));
+      charGuidToSamples.set(guid, track.Samples);
+    }
+  }
+
+  for (const ev of state.events) {
+    if (ev.Group !== 'characterDeath' || ev.Word1 == null || ev.RoundNumber == null) continue;
+    const key = charGuidToKey.get(ev.Word1);
+    if (!key) continue;
+    const sample = interpolateSample(charGuidToSamples.get(ev.Word1), ev.TimeMs);
+    if (!sample) continue;
+
+    if (!state.deaths.has(key)) state.deaths.set(key, new Map());
+    const roundDeaths = state.deaths.get(key);
+    const existing = roundDeaths.get(ev.RoundNumber);
+    if (!existing || ev.TimeMs < existing.TimeMs) {
+      roundDeaths.set(ev.RoundNumber, { TimeMs: ev.TimeMs, X: sample.PosX, Y: sample.PosY });
+    }
+  }
 }
 
 function agentImageFor(player) {
@@ -452,11 +528,13 @@ function applyLoadedOrientation() {
   mapRotateSelect.value = String(loaded.rotate);
   mapFlipCheckbox.checked = loaded.flipH;
   mapScaleInput.value = String(loaded.scale);
-  mapOffsetXInput.value = String(Math.round(loaded.offsetX * 100));
-  mapOffsetYInput.value = String(Math.round(loaded.offsetY * 100));
+  // Rounded to 0.1% (matching the sliders' step="0.1") rather than a whole percent -- panning
+  // used to jump by whole percentage points per tick, which was much too coarse.
+  mapOffsetXInput.value = String(Math.round(loaded.offsetX * 1000) / 10);
+  mapOffsetYInput.value = String(Math.round(loaded.offsetY * 1000) / 10);
   mapScaleValue.textContent = loaded.scale.toFixed(2);
-  mapOffsetXValue.textContent = Math.round(loaded.offsetX * 100) + '%';
-  mapOffsetYValue.textContent = Math.round(loaded.offsetY * 100) + '%';
+  mapOffsetXValue.textContent = (Math.round(loaded.offsetX * 1000) / 10).toFixed(1) + '%';
+  mapOffsetYValue.textContent = (Math.round(loaded.offsetY * 1000) / 10).toFixed(1) + '%';
 }
 
 // Sliders update mapOrientation and the on-screen readout live on every drag tick ('input', fires
@@ -484,13 +562,13 @@ mapScaleInput.addEventListener('change', persistOrientationChange);
 mapOffsetXInput.addEventListener('input', () => {
   const pct = Number(mapOffsetXInput.value) || 0;
   mapOrientation.offsetX = pct / 100;
-  mapOffsetXValue.textContent = pct + '%';
+  mapOffsetXValue.textContent = pct.toFixed(1) + '%';
 });
 mapOffsetXInput.addEventListener('change', persistOrientationChange);
 mapOffsetYInput.addEventListener('input', () => {
   const pct = Number(mapOffsetYInput.value) || 0;
   mapOrientation.offsetY = pct / 100;
-  mapOffsetYValue.textContent = pct + '%';
+  mapOffsetYValue.textContent = pct.toFixed(1) + '%';
 });
 mapOffsetYInput.addEventListener('change', persistOrientationChange);
 btnResetOrientation.addEventListener('click', () => {
@@ -502,8 +580,8 @@ btnResetOrientation.addEventListener('click', () => {
   mapOffsetXInput.value = '0';
   mapOffsetYInput.value = '0';
   mapScaleValue.textContent = '1.00';
-  mapOffsetXValue.textContent = '0%';
-  mapOffsetYValue.textContent = '0%';
+  mapOffsetXValue.textContent = '0.0%';
+  mapOffsetYValue.textContent = '0.0%';
   persistOrientationChange();
 });
 
@@ -578,6 +656,10 @@ function logSpawnDebugInfo() {
   lines.push('Map orientation control: rotate=' + mapOrientation.rotate + '  flipH=' + mapOrientation.flipH +
     '  scale=' + mapOrientation.scale + '  offsetX=' + mapOrientation.offsetX + '  offsetY=' + mapOrientation.offsetY +
     (KNOWN_MAP_ORIENTATIONS[state.map.uuid] ? '  (built-in default for this map)' : ''));
+  const hasSides = (state.match.Sides || []).length > 0;
+  lines.push('Team sides: ' + (hasSides
+    ? 'resolved (' + state.match.Sides.length + ' round(s) -- spike-carrier + spawn-cluster method, see README)'
+    : 'not determined for this replay -- falling back to individual per-player colors'));
   lines.push('');
   lines.push('Spawn-frame positions (u/v should be within 0..1 to land on the map image):');
   lines.push(['player', 'PosX', 'PosY', 'u', 'v', 'insideImage'].join('\t'));
@@ -611,13 +693,14 @@ btnCopyDebug.addEventListener('click', async () => {
 
 function buildRoster() {
   roster.innerHTML = '';
+  const round = findRoundAt(state.match.Rounds || [], state.currentTimeMs);
+  const roundNumber = round ? round.RoundNumber : null;
   (state.match.Players || []).forEach((p) => {
-    const key = playerKey(p);
     const row = document.createElement('div');
     row.className = 'roster-row';
     const swatch = document.createElement('span');
     swatch.className = 'swatch';
-    swatch.style.background = state.playerColor.get(key);
+    swatch.style.background = colorForPlayer(p, roundNumber);
     const label = document.createElement('span');
     label.textContent = p.AgentName || '(unknown agent)';
     row.appendChild(swatch);
@@ -648,6 +731,8 @@ function buildChapters() {
 // ---------------------------------------------------------------------------
 // Transport controls
 // ---------------------------------------------------------------------------
+
+let lastRosterRound; // see updateTimeUi() below
 
 scrubber.addEventListener('input', () => {
   state.currentTimeMs = Number(scrubber.value);
@@ -697,6 +782,14 @@ function updateTimeUi() {
   chaptersEl.querySelectorAll('.chapter').forEach((btn) => {
     btn.classList.toggle('active', !!round && btn.dataset.start === String(round.StartTimeMs));
   });
+
+  // Roster swatches show attack/defense color, which can flip between rounds (halftime) --
+  // rebuild them only when the round actually changed, not on every scrub/frame tick.
+  const roundNumber = round ? round.RoundNumber : null;
+  if (roundNumber !== lastRosterRound) {
+    lastRosterRound = roundNumber;
+    buildRoster();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -811,6 +904,9 @@ function drawAbilityCasts(w, h) {
 }
 
 function drawVisionCones(w, h) {
+  const round = findRoundAt(state.match.Rounds || [], state.currentTimeMs);
+  const roundNumber = round ? round.RoundNumber : null;
+
   for (const key of Object.keys(state.visionCones)) {
     const cones = state.visionCones[key];
     if (!cones || cones.length === 0) continue;
@@ -819,7 +915,8 @@ function drawVisionCones(w, h) {
     const cone = idx >= 0 ? cones[idx] : cones[0];
     if (!cone) continue;
 
-    const color = state.playerColor.get(key) || '#ffffff';
+    const player = state.playerByKey.get(key);
+    const color = player ? colorForPlayer(player, roundNumber) : (state.playerColor.get(key) || '#ffffff');
     const origin = toPixel(cone.OriginX, cone.OriginY, w, h);
 
     ctx.fillStyle = colorWithAlpha(color, 0.1);
@@ -840,15 +937,29 @@ function drawVisionCones(w, h) {
 }
 
 function drawPlayers(w, h) {
+  const round = findRoundAt(state.match.Rounds || [], state.currentTimeMs);
+  const roundNumber = round ? round.RoundNumber : null;
+
   for (const track of state.tracks) {
     const player = track.Player;
     const key = playerKey(player);
+    const color = colorForPlayer(player, roundNumber);
+
+    // Once this player has died this round, stop drawing their live icon and mark where they
+    // died instead -- for the rest of the round (scrubbing back before the death time still shows
+    // them alive, since state.currentTimeMs < death.TimeMs again).
+    const death = roundNumber != null ? state.deaths.get(key)?.get(roundNumber) : null;
+    if (death && state.currentTimeMs >= death.TimeMs) {
+      const deathPos = toPixel(death.X, death.Y, w, h);
+      drawDeathMarker(deathPos.x, deathPos.y, color);
+      continue;
+    }
+
     const sample = interpolateSample(track.Samples, state.currentTimeMs);
     if (!sample) continue;
 
     const origin = toPixel(sample.PosX, sample.PosY, w, h);
     const px = origin.x, py = origin.y;
-    const color = state.playerColor.get(key) || '#ffffff';
 
     // Facing arrow: project a point ahead of the player in game-world space (using VALORANT's
     // own yaw) through the same map transform as everything else, rather than rotating on
@@ -883,4 +994,17 @@ function drawPlayers(w, h) {
     ctx.arc(px, py, AGENT_ICON_RADIUS_PX, 0, Math.PI * 2);
     ctx.stroke();
   }
+}
+
+/** Death marker: an X in the dying player's team color, at the position they died. */
+function drawDeathMarker(px, py, color) {
+  const r = AGENT_ICON_RADIUS_PX * 0.8;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(px - r, py - r);
+  ctx.lineTo(px + r, py + r);
+  ctx.moveTo(px + r, py - r);
+  ctx.lineTo(px - r, py + r);
+  ctx.stroke();
 }

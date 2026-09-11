@@ -82,6 +82,7 @@ public static class AnalysisPipeline
             Map = analysis.Map,
             Players = analysis.Players,
             Rounds = analysis.Rounds,
+            Sides = analysis.Sides,
         });
 
         await WriteJsonAsync(Path.Combine(outputDirectory, "events.json"), analysis.Events);
