@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Downloads map and agent artwork from Riot's own public content mirror
+    Downloads map, agent, and per-ability icon artwork from Riot's own public content mirror
     (https://valorant-api.com) for the 2D replay viewer (viewer/index.html).
 
 .DESCRIPTION
@@ -12,8 +12,13 @@
 
     Run it once. It writes into an "assets" folder next to this project's root (a sibling of
     this script's own "scripts" folder, and of "viewer"):
-      assets/maps/<map-uuid>.png      - each competitive map's minimap image
-      assets/agents/<agent-uuid>.png  - each agent's icon
+      assets/maps/<map-uuid>.png                     - each competitive map's minimap image
+      assets/agents/<agent-uuid>.png                 - each agent's icon
+      assets/abilities/<agent-uuid>/<slot>.png        - each agent's per-ability icon (slot is
+                                                        valorant-api's own name: ability1,
+                                                        ability2, grenade, ultimate, passive --
+                                                        NOT this project's internal codename/slot
+                                                        tokens, which don't reliably map to these)
       assets/catalog.json             - combined metadata, for reference/debugging
       assets/catalog.js               - the same data as a plain `window.VRF_CATALOG = {...}`
                                          script — viewer/index.html loads this file directly
@@ -51,8 +56,10 @@ $projectRoot = Split-Path -Parent $scriptRoot
 $assetsRoot = Join-Path $projectRoot 'assets'
 $mapsDir = Join-Path $assetsRoot 'maps'
 $agentsDir = Join-Path $assetsRoot 'agents'
+$abilitiesDir = Join-Path $assetsRoot 'abilities'
 New-Item -ItemType Directory -Force -Path $mapsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
+New-Item -ItemType Directory -Force -Path $abilitiesDir | Out-Null
 
 $failures = New-Object System.Collections.Generic.List[string]
 
@@ -111,17 +118,44 @@ foreach ($map in $competitiveMaps) {
 
 Write-Host ""
 Write-Host "=== Agents ==="
-$allAgents = Get-RemoteJson -Url 'https://valorant-api.com/v1/agents?isPlayableCharacter=true'
+$allAgents = Get-RemoteJson -Url 'https://valorant-api.com/v1/agents?isPlayableCharacter=true&language=en-US'
 
 $agentCatalog = @()
 foreach ($agent in $allAgents) {
     $dest = Join-Path $agentsDir "$($agent.uuid).png"
     $ok = Save-Image -Url $agent.displayIcon -DestinationPath $dest -Label "agent: $($agent.displayName)"
+
+    # Per-ability icons, keyed by valorant-api's own slot name (ability1/ability2/grenade/
+    # ultimate/passive) -- NOT this project's internal per-agent codename/slot tokens (see
+    # UtilityEffectClassifier.ExtractDescriptiveKeyword's doc comment), which is why the viewer
+    # matches markers to abilities by comparing text (DescriptiveKeyword vs displayName/
+    # description below), not by slot name.
+    $agentAbilitiesDir = Join-Path $abilitiesDir $agent.uuid
+    $abilityCatalog = @()
+    foreach ($ability in $agent.abilities) {
+        if (-not $ability.displayIcon) {
+            # Some slots (e.g. a passive with no standalone icon) legitimately have none.
+            continue
+        }
+        $slot = $ability.slot.ToLowerInvariant()
+        New-Item -ItemType Directory -Force -Path $agentAbilitiesDir | Out-Null
+        $abilityDest = Join-Path $agentAbilitiesDir "$slot.png"
+        $abilityOk = Save-Image -Url $ability.displayIcon -DestinationPath $abilityDest -Label "ability: $($agent.displayName) / $($ability.displayName)"
+        $abilityCatalog += [ordered]@{
+            slot           = $ability.slot
+            displayName    = $ability.displayName
+            description    = $ability.description
+            image          = "abilities/$($agent.uuid)/$slot.png"
+            imageAvailable = $abilityOk
+        }
+    }
+
     $agentCatalog += [ordered]@{
         uuid           = $agent.uuid
         displayName    = $agent.displayName
         image          = "agents/$($agent.uuid).png"
         imageAvailable = $ok
+        abilities      = $abilityCatalog
     }
 }
 
@@ -147,7 +181,8 @@ Set-Content -Path $catalogJsPath -Value "window.VRF_CATALOG = $catalogJson;" -En
 Write-Host ""
 Write-Host "Wrote $catalogJsonPath"
 Write-Host "Wrote $catalogJsPath"
-Write-Host "Maps downloaded: $($mapCatalog.Count)   Agents downloaded: $($agentCatalog.Count)"
+$abilityIconCount = ($agentCatalog | ForEach-Object { $_.abilities.Count } | Measure-Object -Sum).Sum
+Write-Host "Maps downloaded: $($mapCatalog.Count)   Agents downloaded: $($agentCatalog.Count)   Ability icons downloaded: $abilityIconCount"
 
 if ($failures.Count -gt 0) {
     Write-Host ""

@@ -321,6 +321,47 @@ The scrubber itself (`#scrubber` in `viewer/style.css`) is a custom-styled 20px 
 `"10"`) for finer keyboard-arrow nudging, both aimed at making it easier to land on an exact
 moment over a long match.
 
+### Real ability icons
+
+Utility markers can show the actual VALORANT ability icon (from valorant-api.com) instead of —
+or, for area effects, on top of — the plain colored shapes in `UTILITY_COLORS`. Run
+`scripts/Fetch-Assets.ps1` (it now also downloads every agent's per-ability icons, into
+`assets/abilities/<agent-uuid>/<slot>.png`) and reload the viewer to pick this up.
+
+**Why this can't just use the internal class-path slot** (the `4`/`Q`/`E`/`X`/`C` in e.g.
+`Ability_Wraith_4_Smoke`): it doesn't reliably correspond to valorant-api's own ability1/ability2/
+grenade/ultimate slots. Confirmed directly: Omen's smoke is class-path slot `"4"`, but on
+valorant-api it's his `Grenade`-slot ability (Dark Cover, his signature). So matching by slot
+*number* would need per-agent, per-slot verification this project doesn't have for most of the 29
+agents (this is the same "positional guessing is unreliable" finding as `docs/AGENT_ABILITIES.md`'s
+own note on ability-level codenames).
+
+**What it does instead: match on text.** The C# side now resolves, per utility event:
+- `AgentRealName` (`AgentCodenames.ResolveRealName`) — the casting agent's real name, or `null`
+  for something not tied to any agent (a map-wide pickup like `UltPointOrb`).
+- `DescriptiveKeyword` (`UtilityEffectClassifier.ExtractDescriptiveKeyword`) — the human-readable
+  fragment of the class name, with the actor-type prefix, the agent's codename, and any leftover
+  numeric/single-character slot marker stripped out (e.g. `Zone_Wraith_4_Smoke` → `"Smoke"`,
+  `Ability_Q_Aggrobot_SeekerNade` → `"SeekerNade"`).
+
+The viewer (`resolveUtilityAbilityMatch` in `viewer/app.js`) then scores `DescriptiveKeyword`
+against each of that agent's real abilities' `displayName` + `description` text (from the fetched
+catalog), using a small stopword-filtered shared-word-root count (`scoreAbilityMatch`) — words
+like "seeking"/"SeekerNade" or "explodes"/"ExplodeyPatch" share a root even though they're not the
+same word. **A marker only gets an icon when exactly one ability scores strictly higher than every
+other candidate for that agent** — a tie means genuine ambiguity from this text alone (confirmed:
+Gekko's `Ability_Aggrobot_C_ExplodeyPatch` and `Ability_Aggrobot_X_RollyExplosion` both share an
+"explod-" root with more than one of his 4 real ability descriptions), and the marker keeps its
+plain colored shape rather than risk showing the wrong ability's icon.
+
+**Verified against every agent this project has real ability text for** (fetched from
+valorant-api.com this session): KAY/O's flash, Chamber's trap, Gekko's Wingman (and its correct
+refusal to guess on the Explodey/Rolly tie above), and Phoenix's wall. Every other agent runs the
+exact same generic algorithm — it is *not* hardcoded per agent — but is otherwise unverified until
+checked against your own export; the viewer's Debug info panel now includes an `IconMatch` column
+per utility marker (which ability it resolved to and its match score, or that it fell back to a
+colored shape) specifically so you can check this yourself rather than take it on faith.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,

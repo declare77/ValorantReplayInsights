@@ -93,6 +93,24 @@ const WALL_HALF_LENGTH_UNITS = 400;
 const ABILITY_MARKER_FADE_MS = 1500;
 const AGENT_ICON_RADIUS_PX = 12;
 const FACING_LOOKAHEAD_UNITS = 220;
+const UTILITY_ICON_SIZE_PX = 28;
+
+// Words too generic/common across almost every ability's UI text (a HUD action verb like "FIRE",
+// or a filler word) to count as a real content match -- see resolveUtilityAbilityMatch's doc
+// comment. Extend freely, same editable-list philosophy as UtilityCategory's own keyword table
+// on the C# side.
+const ABILITY_MATCH_STOPWORDS = new Set([
+  'equip', 'equipped', 'equipment', 'fire', 'alt', 'activate', 'deactivate', 'instantly', 'hold',
+  'release', 'reactivate', 'interact', 'ability', 'abilities', 'effect', 'effects', 'field',
+  'fields', 'this', 'that', 'their', 'them', 'they', 'your', 'you', 'anyone', 'anything',
+  'someone', 'enemy', 'enemies', 'player', 'players', 'ally', 'allies', 'damage', 'damages',
+  'dealing', 'deals', 'deal', 'instead', 'area', 'areas', 'radius', 'short', 'long', 'line',
+  'lines', 'forward', 'through', 'world', 'direction', 'amount', 'times', 'time', 'duration',
+  'charge', 'charges', 'cooldown', 'aim', 'sights', 'ground', 'create', 'creates', 'creating',
+  'while', 'after', 'before', 'first', 'each', 'every', 'near', 'around', 'within', 'without',
+  'into', 'onto', 'gain', 'gains', 'brief', 'briefly', 'quickly', 'slowly', 'multiple',
+  'remaining', 'lasts', 'last', 'sets',
+]);
 
 // Nudge via the "Facing offset" control in the UI if a facing arrow looks rotated/mirrored on a
 // particular map -- it hasn't been needed on any export this project has been checked against.
@@ -214,6 +232,9 @@ const state = {
   playerColor: new Map(),
   playerAgentImage: new Map(),
   playerByKey: new Map(),
+  // "<agent uuid>/<ability image path>" -> Image, built lazily the first time a marker resolves
+  // to that ability. See resolveUtilityIconImage().
+  utilityIconCache: new Map(),
   // playerKey -> Map(roundNumber -> { TimeMs, X, Y }), built from characterDeath events. See
   // buildDeathMarkers().
   deaths: new Map(),
@@ -513,6 +534,117 @@ function agentImageFor(player) {
 }
 
 // ---------------------------------------------------------------------------
+// Real ability icons for utility markers (matches a marker to its agent's actual VALORANT
+// ability, via valorant-api.com data -- see scripts/Fetch-Assets.ps1 -- instead of always
+// drawing the plain colored shapes in UTILITY_COLORS).
+// ---------------------------------------------------------------------------
+
+function resolveUtilityAgentCatalogEntry(agentRealName) {
+  const catalog = window.VRF_CATALOG;
+  if (!catalog || !agentRealName) return null;
+  return (catalog.agents || []).find((a) => a.displayName === agentRealName) || null;
+}
+
+function significantWords(text) {
+  if (!text) return [];
+  return (text.toLowerCase().match(/[a-z]+/g) || [])
+    .filter((w) => w.length >= 4 && !ABILITY_MATCH_STOPWORDS.has(w));
+}
+
+// Real ability descriptions never phrase a class name's internal fragment ("SeekerNade",
+// "ExplodeyPatch") the same way English prose does ("seeking", "explodes") -- so rather than
+// requiring an exact word match, two words "share a root" if they're identical, share the same
+// first 4 characters (catches seek/seeking, explod/explodes/explosion), or one is a substring of
+// the other (catches flamewallmanager/flame, smokezone/smoke).
+function wordsShareRoot(a, b) {
+  if (a === b) return true;
+  if (a.length < 4 || b.length < 4) return false;
+  if (a.slice(0, 4) === b.slice(0, 4)) return true;
+  return a.includes(b) || b.includes(a);
+}
+
+function scoreAbilityMatch(descriptiveKeyword, ability) {
+  const queryWords = significantWords(descriptiveKeyword);
+  const abilityWords = significantWords((ability.displayName || '') + ' ' + (ability.description || ''));
+  if (queryWords.length === 0 || abilityWords.length === 0) return 0;
+
+  let score = 0;
+  const used = new Set();
+  for (const qw of queryWords) {
+    for (const aw of abilityWords) {
+      if (used.has(aw)) continue;
+      if (wordsShareRoot(qw, aw)) {
+        used.add(aw);
+        score++;
+        break;
+      }
+    }
+  }
+  return score;
+}
+
+/**
+ * Best-effort match of a utility marker to one of its agent's real abilities, so it can show the
+ * actual VALORANT ability icon instead of a plain colored shape.
+ *
+ * This project's own internal class-path slot tokens (the "4"/"Q"/"E"/"X"/"C" in e.g.
+ * `Ability_Wraith_4_Smoke`) do NOT reliably correspond to valorant-api's own ability1/ability2/
+ * grenade/ultimate slots -- confirmed: Omen's smoke is class-path slot "4" but valorant-api slot
+ * "grenade" (it's his signature ability, Dark Cover). So this matches on TEXT instead:
+ * `u.DescriptiveKeyword` (the human-readable fragment of the class name, from the C# side's
+ * `UtilityEffectClassifier.ExtractDescriptiveKeyword` -- e.g. "Smoke", "SeekerNade") against each
+ * of `u.AgentRealName`'s real abilities' displayName + description (from valorant-api.com, via
+ * VRF_CATALOG/scripts/Fetch-Assets.ps1), scored by stopword-filtered shared-word-root count.
+ *
+ * A marker only gets an icon when exactly one ability scores strictly higher than every other
+ * candidate for that agent. A tie -- e.g. Gekko's `Ability_Aggrobot_X_RollyExplosion` and
+ * `Ability_Aggrobot_C_ExplodeyPatch` both share a root with "explod-" words in more than one of
+ * his abilities' descriptions -- means genuine ambiguity from this text alone, so the marker
+ * keeps its plain colored shape rather than risk showing the wrong ability's icon. Verified
+ * against every agent this project has real ability text for (KAY/O, Chamber, Gekko, Phoenix);
+ * every other agent runs the same generic algorithm, unverified until you check it against your
+ * own export.
+ */
+function resolveUtilityAbilityMatch(u) {
+  const agent = resolveUtilityAgentCatalogEntry(u.AgentRealName);
+  if (!agent || !u.DescriptiveKeyword || !agent.abilities || agent.abilities.length === 0) {
+    return null;
+  }
+
+  let best = null;
+  let bestScore = 0;
+  let secondScore = 0;
+  for (const ability of agent.abilities) {
+    const score = scoreAbilityMatch(u.DescriptiveKeyword, ability);
+    if (score > bestScore) {
+      secondScore = bestScore;
+      bestScore = score;
+      best = ability;
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  }
+
+  return (best && bestScore >= 1 && bestScore > secondScore) ? { agent, ability: best, score: bestScore } : null;
+}
+
+/** The (possibly still-loading) Image for a marker's matched ability icon, or null if none
+ * confidently matched (see resolveUtilityAbilityMatch) -- cached per agent+ability so repeated
+ * calls across frames don't recreate/re-request the same image. */
+function resolveUtilityIconImage(u) {
+  const match = resolveUtilityAbilityMatch(u);
+  if (!match || !match.ability.image) return null;
+
+  const key = match.agent.uuid + '/' + match.ability.image;
+  if (!state.utilityIconCache.has(key)) {
+    const img = new Image();
+    img.src = '../assets/' + match.ability.image;
+    state.utilityIconCache.set(key, img);
+  }
+  return state.utilityIconCache.get(key);
+}
+
+// ---------------------------------------------------------------------------
 // Map resolution
 // ---------------------------------------------------------------------------
 
@@ -725,9 +857,13 @@ function logSpawnDebugInfo() {
   const utilityRows = (state.utility || []).map((u) => {
     const uv = (u.X != null && u.Y != null) ? worldToUv(u.X, u.Y, state.map) : null;
     const dist = distToNearestSpawn(u.X, u.Y);
+    const iconMatch = resolveUtilityAbilityMatch(u);
     return {
       ClassPath: u.ClassPath || '(none)',
       Category: u.Category,
+      AgentRealName: u.AgentRealName || '(none)',
+      DescriptiveKeyword: u.DescriptiveKeyword || '(none)',
+      IconMatch: iconMatch ? (iconMatch.ability.displayName + ' (score ' + iconMatch.score + ')') : '(no confident match -- colored shape)',
       X: u.X != null ? Number(u.X.toFixed(1)) : null,
       Y: u.Y != null ? Number(u.Y.toFixed(1)) : null,
       u: uv ? Number(uv.u.toFixed(4)) : null,
@@ -744,12 +880,13 @@ function logSpawnDebugInfo() {
 
   lines.push('');
   lines.push('Utility markers (state.utility), closest to a player spawn point first -- ' +
-    utilityRows.length + ' total, current playhead ' + state.currentTimeMs + 'ms:');
-  lines.push(['ClassPath', 'Category', 'X', 'Y', 'u', 'v', 'insideImage', 'distToNearestSpawn',
-    'SpawnTimeMs', 'DespawnTimeMs', 'activeAtPlayhead'].join('\t'));
+    utilityRows.length + ' total, current playhead ' + state.currentTimeMs + 'ms. IconMatch shows ' +
+    'which real ability icon (if any) this marker resolved to -- see README\'s "Real ability icons" section.');
+  lines.push(['ClassPath', 'Category', 'AgentRealName', 'DescriptiveKeyword', 'IconMatch', 'X', 'Y', 'u', 'v',
+    'insideImage', 'distToNearestSpawn', 'SpawnTimeMs', 'DespawnTimeMs', 'activeAtPlayhead'].join('\t'));
   for (const r of utilityRows) {
-    lines.push([r.ClassPath, r.Category, r.X, r.Y, r.u, r.v, r.insideImage, r.distToNearestSpawn,
-      r.SpawnTimeMs, r.DespawnTimeMs, r.activeAtPlayhead].join('\t'));
+    lines.push([r.ClassPath, r.Category, r.AgentRealName, r.DescriptiveKeyword, r.IconMatch, r.X, r.Y, r.u, r.v,
+      r.insideImage, r.distToNearestSpawn, r.SpawnTimeMs, r.DespawnTimeMs, r.activeAtPlayhead].join('\t'));
   }
 
   debugText.value = lines.join('\n');
@@ -984,6 +1121,7 @@ function drawUtility(w, h) {
     const origin = toPixel(u.X, u.Y, w, h);
     const px = origin.x, py = origin.y;
     const color = UTILITY_COLORS[u.Category] || 'rgba(255,255,255,0.6)';
+    const icon = resolveUtilityIconImage(u);
 
     if (u.Category === 'Wall') {
       const yaw = (u.YawDegrees || 0) * Math.PI / 180;
@@ -995,19 +1133,50 @@ function drawUtility(w, h) {
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
+      // The line itself still shows the wall's length/orientation -- the icon just marks its
+      // midpoint, same as it marks the center of an area effect below.
+      drawUtilityIcon(icon, px, py);
     } else if (u.Category === 'Smoke' || u.Category === 'IncendiaryOrMolly') {
+      // Area effects keep their translucent radius circle -- that conveys real spatial info
+      // (how much ground it covers) an icon alone can't -- and the icon marks its center on top.
       const edge = toPixel(u.X + UTILITY_AREA_RADIUS_UNITS, u.Y, w, h);
       const radiusPx = Math.max(Math.hypot(edge.x - origin.x, edge.y - origin.y), 4);
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(px, py, radiusPx, 0, Math.PI * 2);
       ctx.fill();
+      drawUtilityIcon(icon, px, py);
+    } else if (icon) {
+      // Point markers (traps, turrets, drones, thrown projectiles): the real ability icon
+      // replaces the plain dot entirely once one is confidently matched.
+      drawUtilityIcon(icon, px, py);
     } else {
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(px, py, 5, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+}
+
+/**
+ * Draws a resolved ability icon (see resolveUtilityIconImage) centered at (px, py), with a small
+ * dark backing circle so a light-colored icon stays legible over any part of the map art. A
+ * no-op if the image hasn't finished loading yet (or failed to) -- next frame picks it up once it
+ * has, same as the player-portrait icons elsewhere in this file.
+ */
+function drawUtilityIcon(icon, px, py) {
+  if (!icon || !icon.complete || icon.naturalWidth === 0) return;
+  const half = UTILITY_ICON_SIZE_PX / 2;
+  try {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.arc(px, py, half + 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.drawImage(icon, px - half, py - half, UTILITY_ICON_SIZE_PX, UTILITY_ICON_SIZE_PX);
+  } catch (err) {
+    // A broken/errored image can throw in some browsers -- fall through silently, same as the
+    // (still-drawn) colored shape would if this function weren't called at all.
   }
 }
 

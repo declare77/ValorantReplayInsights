@@ -183,4 +183,51 @@ public static class UtilityEffectClassifier
         string? abilityFolder = segments[..^1].FirstOrDefault(s => s.StartsWith("Ability_", StringComparison.Ordinal));
         return abilityFolder is not null ? $"{agent}/{abilityFolder}" : agent;
     }
+
+    private static readonly HashSet<string> ActorTypePrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Ability", "Projectile", "Zone", "GameObject", "Patch", "Pawn",
+    };
+
+    private static readonly HashSet<string> KnownCodenames = new(
+        AgentCodenames.CodenameToRealName.Keys, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Pulls the human-readable "what this actually is" fragment out of a class name, for
+    /// fuzzy-matching against real ability names/descriptions (e.g. from valorant-api.com) --
+    /// not for categorization (see <see cref="Classify"/> for that). Strips the leading
+    /// actor-type token (<c>Ability_</c>, <c>Projectile_</c>, <c>Zone_</c>, <c>GameObject_</c>,
+    /// <c>Patch_</c>, <c>Pawn_</c>), every known agent codename (<see cref="AgentCodenames"/>),
+    /// and any leftover token that's purely numeric or a single character -- VALORANT's internal
+    /// class names use exactly those as ability-slot markers (e.g. the <c>4</c>/<c>Q</c>/<c>E</c>/
+    /// <c>X</c>/<c>C</c> seen in real names like <c>Ability_Wraith_4_Smoke</c> or
+    /// <c>Ability_Grenadier_C_Flash</c>), and no real English ability word is one character long,
+    /// so this is a safe general filter rather than an enumerated slot-letter list.
+    ///
+    /// <para>Verified against every real class path this project has actual <c>dump-classes</c>
+    /// evidence for (see <see cref="UtilityEffectClassifierTests"/>): e.g. <c>Zone_Wraith_4_Smoke</c>
+    /// → <c>"Smoke"</c>, <c>Ability_Q_Aggrobot_SeekerNade</c> → <c>"SeekerNade"</c>,
+    /// <c>GameObject_Phoenix_Q_FlameWallManager_Production</c> → <c>"FlameWallManager Production"</c>.
+    /// This is a hint for fuzzy-matching against real ability text, not a guaranteed-correct
+    /// ability identifier by itself -- the caller (the viewer, matching against valorant-api.com
+    /// data) decides how confident a match needs to be before trusting it.</para>
+    /// </summary>
+    public static string? ExtractDescriptiveKeyword(string? classPath)
+    {
+        string? className = ClassNameSegment(classPath);
+        if (string.IsNullOrEmpty(className)) return null;
+
+        string[] tokens = className.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        var kept = new List<string>();
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            string token = tokens[i];
+            if (i == 0 && ActorTypePrefixes.Contains(token)) continue;
+            if (token.Length <= 1) continue;
+            if (token.All(char.IsDigit)) continue;
+            if (KnownCodenames.Contains(token)) continue;
+            kept.Add(token);
+        }
+        return kept.Count > 0 ? string.Join(' ', kept) : null;
+    }
 }

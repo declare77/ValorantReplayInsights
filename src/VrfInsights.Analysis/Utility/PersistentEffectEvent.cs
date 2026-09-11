@@ -1,3 +1,4 @@
+using VrfInsights.Analysis.Common;
 using VrfInsights.Data.Tables;
 
 namespace VrfInsights.Analysis.Utility;
@@ -8,6 +9,15 @@ namespace VrfInsights.Analysis.Utility;
 /// carried through mainly so a directional effect (a wall) can be drawn oriented rather than as
 /// a bare point — a 2D viewer still has to assume a length for that line since this table has no
 /// size/extent field, so treat the drawn line as an approximation, not measured geometry.</param>
+/// <param name="AgentRealName">The casting agent's real/release name (e.g. <c>"Omen"</c>), via
+/// <see cref="AgentCodenames.ResolveRealName"/> -- null when <c>ClassPath</c> doesn't contain a
+/// known agent codename (e.g. a map-wide pickup like <c>UltPointOrb</c>, not tied to any agent).
+/// Carried through so the viewer can look up that agent's real ability icons/names (from
+/// valorant-api.com) without duplicating the codename table client-side.</param>
+/// <param name="DescriptiveKeyword">The human-readable fragment of the class name, via
+/// <see cref="UtilityEffectClassifier.ExtractDescriptiveKeyword"/> (e.g. <c>"Smoke"</c>,
+/// <c>"SeekerNade"</c>) -- a hint for fuzzy-matching against that agent's real ability text, not
+/// a confirmed ability identifier by itself.</param>
 public sealed record PersistentEffectEvent(
     long ActorNetGuid,
     string? ClassPath,
@@ -17,7 +27,9 @@ public sealed record PersistentEffectEvent(
     double? X,
     double? Y,
     double? Z,
-    double? YawDegrees);
+    double? YawDegrees,
+    string? AgentRealName,
+    string? DescriptiveKeyword);
 
 /// <summary>
 /// Builds smoke/wall/molly/trap/etc. placement events from <c>actors.parquet</c>'s open/close
@@ -108,7 +120,9 @@ public static class UtilityTimelineBuilder
                         X: entry.OpenRow.SpawnX,
                         Y: entry.OpenRow.SpawnY,
                         Z: entry.OpenRow.SpawnZ,
-                        YawDegrees: entry.OpenRow.SpawnYaw));
+                        YawDegrees: entry.OpenRow.SpawnYaw,
+                        AgentRealName: AgentCodenames.ResolveRealName(entry.OpenRow.ClassPath),
+                        DescriptiveKeyword: UtilityEffectClassifier.ExtractDescriptiveKeyword(entry.OpenRow.ClassPath)));
                 }
             }
         }
@@ -126,7 +140,9 @@ public static class UtilityTimelineBuilder
                 X: entry.OpenRow.SpawnX,
                 Y: entry.OpenRow.SpawnY,
                 Z: entry.OpenRow.SpawnZ,
-                YawDegrees: entry.OpenRow.SpawnYaw));
+                YawDegrees: entry.OpenRow.SpawnYaw,
+                AgentRealName: AgentCodenames.ResolveRealName(entry.OpenRow.ClassPath),
+                DescriptiveKeyword: UtilityEffectClassifier.ExtractDescriptiveKeyword(entry.OpenRow.ClassPath)));
         }
 
         List<PersistentEffectEvent> deduped = PreferZoneOverNonZoneSiblings(results);

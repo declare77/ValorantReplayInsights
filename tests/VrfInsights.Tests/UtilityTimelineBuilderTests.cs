@@ -230,4 +230,58 @@ public class UtilityTimelineBuilderTests
 
         Assert.Empty(events);
     }
+
+    // AgentRealName/DescriptiveKeyword -- populated for the viewer's real-ability-icon feature
+    // (matching a marker against valorant-api.com data), not used anywhere in this pipeline
+    // itself. Confirmed they're actually attached to the built events, both for the "closed
+    // during the replay" path and the "still open at end of replay" path.
+
+    [Fact]
+    public void Build_AttachesAgentRealNameAndDescriptiveKeyword_ForAClosedEvent()
+    {
+        var actors = new List<ActorRow>
+        {
+            MakeActor(4174, 54613, "open",
+                classPath: "/Game/Characters/Wraith/S0/Ability_4/Zone_Wraith_4_Smoke.Zone_Wraith_4_Smoke_C",
+                x: -1042.3, y: -5020.7, z: 403.3),
+            MakeActor(4174, 70613, "close", classPath: null, x: null, y: null, z: null),
+        };
+
+        PersistentEffectEvent ev = Assert.Single(UtilityTimelineBuilder.Build(actors));
+
+        Assert.Equal("Omen", ev.AgentRealName); // Wraith is Omen's codename
+        Assert.Equal("Smoke", ev.DescriptiveKeyword);
+    }
+
+    [Fact]
+    public void Build_AttachesAgentRealNameAndDescriptiveKeyword_ForAnEventStillOpenAtEndOfReplay()
+    {
+        var actors = new List<ActorRow>
+        {
+            // Projectile_*, not Ability_* -- the latter is the per-player container excluded by
+            // IsAbilityContainerActor and would never reach this far.
+            MakeActor(1, 1000, "open",
+                classPath: "/Game/Characters/Grenadier/S0/Ability_4/Projectile_C_Grenadier_Flash.Projectile_C_Grenadier_Flash_C",
+                x: 10, y: 20, z: 30),
+        };
+
+        PersistentEffectEvent ev = Assert.Single(UtilityTimelineBuilder.Build(actors));
+
+        Assert.Equal("KAY/O", ev.AgentRealName); // Grenadier is KAY/O's codename
+        Assert.Equal("Flash", ev.DescriptiveKeyword);
+    }
+
+    [Fact]
+    public void Build_LeavesAgentRealNameNull_ForAMapWidePickupNotTiedToAnyAgent()
+    {
+        var actors = new List<ActorRow>
+        {
+            MakeActor(1, 1000, "open", classPath: "/Game/GameObjects/CollectibleOrbs/UltPointOrb.UltPointOrb_C", x: 10, y: 20, z: 30),
+        };
+
+        PersistentEffectEvent ev = Assert.Single(UtilityTimelineBuilder.Build(actors));
+
+        Assert.Null(ev.AgentRealName);
+        Assert.Equal("UltPointOrb", ev.DescriptiveKeyword);
+    }
 }

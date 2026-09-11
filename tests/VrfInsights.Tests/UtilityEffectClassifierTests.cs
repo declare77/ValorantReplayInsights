@@ -133,4 +133,31 @@ public class UtilityEffectClassifierTests
 
         Assert.Equal(UtilityCategory.IncendiaryOrMolly, category);
     }
+
+    // ExtractDescriptiveKeyword -- for fuzzy-matching a marker against real ability names/text
+    // from valorant-api.com (the viewer's ability-icon feature), not for categorization. Cases
+    // below use the same real class paths as everywhere else in this file/UtilityTimelineBuilderTests.
+    [Theory]
+    [InlineData("/Game/Characters/Wraith/S0/Ability_4/Zone_Wraith_4_Smoke.Zone_Wraith_4_Smoke_C", "Smoke")]
+    [InlineData("/Game/Characters/Wushu/S0/Ability_4/GameObject_Wushu_4_SmokeZone.GameObject_Wushu_4_SmokeZone_C", "SmokeZone")]
+    [InlineData("/Game/Characters/Deadeye/S0/Ability_4/Ability_Deadeye_4_Trap.Ability_Deadeye_4_Trap_C", "Trap")]
+    [InlineData("/Game/Characters/Grenadier/S0/Ability_4/Ability_Grenadier_C_Flash.Ability_Grenadier_C_Flash_C", "Flash")]
+    [InlineData("/Game/Characters/AggroBot/S0/Ability_Q/Ability_Q_Aggrobot_SeekerNade.Ability_Q_Aggrobot_SeekerNade_C", "SeekerNade")]
+    [InlineData("/Game/Characters/AggroBot/S0/Ability_E/Ability_E_Aggrobot_DiscTurret.Ability_E_Aggrobot_DiscTurret_C", "DiscTurret")]
+    [InlineData("/Game/Characters/AggroBot/S0/ReclaimOrbs/GameObject_Aggrobot_Reclaim_Orb_ExplodeyPatch.GameObject_Aggrobot_Reclaim_Orb_ExplodeyPatch_C", "Reclaim Orb ExplodeyPatch")]
+    [InlineData("/Game/Characters/Phoenix/S0/Ability_Q/Production/GameObject_Phoenix_Q_FlameWallManager_Production.GameObject_Phoenix_Q_FlameWallManager_Production_C", "FlameWallManager Production")]
+    [InlineData("FXC_Test_Smoke_C", "FXC Test Smoke")] // no known prefix/codename to strip; trailing "C" is a length-1 slot-style token
+    [InlineData(null, null)]
+    public void ExtractDescriptiveKeyword_StripsThePrefixCodenameAndSlotMarker_LeavingTheDescriptivePart(string? classPath, string? expected)
+    {
+        Assert.Equal(expected, UtilityEffectClassifier.ExtractDescriptiveKeyword(classPath));
+    }
+
+    [Fact]
+    public void ExtractDescriptiveKeyword_ReturnsNull_WhenNothingIsLeftAfterStripping()
+    {
+        // Class name is just the actor-type prefix plus a codename and a slot marker -- nothing
+        // descriptive remains (this is a synthetic case; no real actor looks like this).
+        Assert.Null(UtilityEffectClassifier.ExtractDescriptiveKeyword("/Game/Characters/Wraith/Ability_Wraith_4.Ability_Wraith_4_C"));
+    }
 }
