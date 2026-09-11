@@ -254,6 +254,20 @@ wrong. Three ways this gets fixed, in the order the viewer itself tries them:
    calibration" line always says what happened — applied (with the fitted rotation, flip, scale,
    pan, and the winning/runner-up scores), inconclusive (and why), or not run (already covered by
    #2, or already has a saved value) — so it's never a silent black box.
+
+   **This needs `scripts/Fetch-Assets.ps1` to have been run *after* this feature was added to know
+   which parts of a map's image are real map vs. transparent padding.** Reading a map image's own
+   pixels back out of a canvas — which is how it would otherwise tell — is something browsers
+   flatly refuse to do for `viewer/index.html` opened the normal way (a plain local file, per the
+   "Running the viewer" section above); there's no in-browser setting or trick that changes this,
+   since it's the same restriction that keeps a malicious local page from reading other files on
+   your disk. So instead, `Fetch-Assets.ps1` now precomputes each map's opaque/transparent shape
+   itself (via .NET's `System.Drawing`, on your machine, once) and bakes it into `catalog.js`
+   alongside everything else it already downloads — the viewer just reads that, no canvas access
+   needed. If the Debug info panel says calibration is "inconclusive -- this browser won't allow
+   reading the map image's pixels back", that's this: re-run `Fetch-Assets.ps1` (no `-Force`
+   needed — it doesn't need to re-download any images, just regenerate `catalog.js` with the added
+   data) and reload the page.
 2. A handful of maps additionally have a **known-good rotation hand-confirmed and built in** (see
    the table below), from back before automatic calibration existed — those take priority over #1
    and are never recomputed.

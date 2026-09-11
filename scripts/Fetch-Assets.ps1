@@ -26,8 +26,20 @@
                                          opened as a plain file, but a <script src> tag works
                                          fine, so this is what actually gets used)
 
+    Each map's catalog entry also gets a small precomputed "alpha mask" (a 48x48 opaque/
+    transparent grid sampled from its own downloaded image, via .NET's System.Drawing here on
+    YOUR machine) baked right into catalog.js alongside it. The viewer's automatic map-orientation
+    calibration (see the README) needs to know which parts of the map image are transparent
+    padding versus the real playable map, but reading a local image's pixels back out of a canvas
+    is something browsers flatly refuse to do for a page opened as a plain file (same restriction
+    as the fetch() one above, just enforced at the canvas API instead) — so that pixel reading has
+    to happen here, once, rather than in the browser every time you load a match.
+
     Safe to re-run any time — already-downloaded files are skipped unless -Force is passed, and
-    the catalog is always rewritten so name changes are picked up.
+    the catalog (alpha masks included) is always rewritten so name changes are picked up. If you
+    pull an update to this project that adds the alpha-mask feature, just re-run this script (no
+    -Force needed, since the images themselves haven't changed) to backfill masks for maps you
+    already downloaded.
 
 .PARAMETER Force
     Re-download every image even if it's already present locally.
@@ -92,6 +104,51 @@ function Save-Image {
     }
 }
 
+$alphaMaskAvailable = $true
+try {
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+} catch {
+    $alphaMaskAvailable = $false
+    Write-Warning "System.Drawing isn't available on this machine ($($_.Exception.Message)) -- map images will still download, but automatic orientation calibration in the viewer will fall back to its (more limited) in-browser method for every map."
+}
+
+# A coarse opaque/transparent grid read from a map's own downloaded image, flattened row-major
+# into a string of '1' (opaque -- real map) / '0' (transparent -- padding outside the map's actual
+# shape) characters. GridSize x GridSize samples is coarse enough to stay fast (a few thousand
+# GetPixel calls per map) while still being plenty precise for what the viewer uses it for: telling
+# whether a *recorded player/utility position* landed on the map or in the padding around it, not
+# rendering anything pixel-perfect.
+function Get-AlphaMask {
+    param(
+        [string]$ImagePath,
+        [int]$GridSize = 48
+    )
+    if (-not $alphaMaskAvailable) { return $null }
+    if (-not (Test-Path $ImagePath)) { return $null }
+
+    $bmp = $null
+    try {
+        $bmp = [System.Drawing.Bitmap]::new($ImagePath)
+        $w = $bmp.Width
+        $h = $bmp.Height
+        $sb = New-Object System.Text.StringBuilder ($GridSize * $GridSize)
+        for ($row = 0; $row -lt $GridSize; $row++) {
+            $py = [Math]::Min($h - 1, [int]((($row + 0.5) / $GridSize) * $h))
+            for ($col = 0; $col -lt $GridSize; $col++) {
+                $px = [Math]::Min($w - 1, [int]((($col + 0.5) / $GridSize) * $w))
+                $pixel = $bmp.GetPixel($px, $py)
+                if ($pixel.A -gt 40) { [void]$sb.Append('1') } else { [void]$sb.Append('0') }
+            }
+        }
+        return $sb.ToString()
+    } catch {
+        Write-Warning "  [mask] couldn't read pixels from $ImagePath for alpha-mask calibration data - $($_.Exception.Message)"
+        return $null
+    } finally {
+        if ($bmp) { $bmp.Dispose() }
+    }
+}
+
 Write-Host ""
 Write-Host "=== Maps ==="
 $allMaps = Get-RemoteJson -Url 'https://valorant-api.com/v1/maps'
@@ -100,10 +157,20 @@ $allMaps = Get-RemoteJson -Url 'https://valorant-api.com/v1/maps'
 # training/Skirmish/HURM entries valorant-api.com also returns don't have these set.
 $competitiveMaps = $allMaps | Where-Object { $null -ne $_.xMultiplier -and $null -ne $_.yMultiplier -and $_.displayIcon }
 
+$MAP_ALPHA_MASK_GRID_SIZE = 48
 $mapCatalog = @()
 foreach ($map in $competitiveMaps) {
     $dest = Join-Path $mapsDir "$($map.uuid).png"
     $ok = Save-Image -Url $map.displayIcon -DestinationPath $dest -Label "map: $($map.displayName)"
+    $alphaMask = $null
+    $alphaMaskSize = 0
+    if ($ok) {
+        $alphaMask = Get-AlphaMask -ImagePath $dest -GridSize $MAP_ALPHA_MASK_GRID_SIZE
+        if ($alphaMask) {
+            $alphaMaskSize = $MAP_ALPHA_MASK_GRID_SIZE
+            Write-Host "  [mask] computed alpha mask for $($map.displayName)"
+        }
+    }
     $mapCatalog += [ordered]@{
         uuid          = $map.uuid
         displayName   = $map.displayName
@@ -113,6 +180,8 @@ foreach ($map in $competitiveMaps) {
         yMultiplier   = $map.yMultiplier
         xScalarToAdd  = $map.xScalarToAdd
         yScalarToAdd  = $map.yScalarToAdd
+        alphaMask     = $alphaMask
+        alphaMaskSize = $alphaMaskSize
     }
 }
 
@@ -182,7 +251,12 @@ Write-Host ""
 Write-Host "Wrote $catalogJsonPath"
 Write-Host "Wrote $catalogJsPath"
 $abilityIconCount = ($agentCatalog | ForEach-Object { $_.abilities.Count } | Measure-Object -Sum).Sum
+$maskedMapCount = ($mapCatalog | Where-Object { $_.alphaMaskSize -gt 0 } | Measure-Object).Count
 Write-Host "Maps downloaded: $($mapCatalog.Count)   Agents downloaded: $($agentCatalog.Count)   Ability icons downloaded: $abilityIconCount"
+Write-Host "Maps with an alpha mask for automatic orientation calibration: $maskedMapCount / $($mapCatalog.Count)"
+if ($maskedMapCount -lt $mapCatalog.Count) {
+    Write-Warning "Some maps are missing an alpha mask (see [mask]/[fail] lines above) -- the viewer's automatic orientation calibration will fall back to its in-browser method for those, which most browsers block for a page opened as a plain file. The manual Map orientation controls always work regardless."
+}
 
 if ($failures.Count -gt 0) {
     Write-Host ""

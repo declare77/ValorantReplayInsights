@@ -302,12 +302,39 @@ function applyCandidateFit(u, v, candidate, fit) {
   return { u: x + 0.5, v: y + 0.5 };
 }
 
+/** Builds an alpha sampler straight from a map's PRECOMPUTED mask (catalog.js's alphaMask/
+ * alphaMaskSize, baked in by Fetch-Assets.ps1 via .NET's System.Drawing on the person's own
+ * machine) rather than reading the live <img> back through a canvas. This is the preferred path,
+ * and for most people the only one that actually works: viewer/index.html is opened as a plain
+ * local file (see the README), and browsers flatly refuse to read a canvas's pixels back out at
+ * all on a page loaded that way ("tainted canvas" -- there's no way for a local file to present
+ * CORS headers, which is what that check normally looks for) -- no crossOrigin setting or trick
+ * fixes this, it has to be worked around by not needing canvas readback in the browser in the
+ * first place. Returns null (not an error) when this map has no mask yet, so the caller can fall
+ * back to the canvas approach, which still works for anyone who happens to serve the viewer over
+ * an actual local web server instead of opening it directly. */
+function buildAlphaSamplerFromMask(map) {
+  const mask = map && map.alphaMask;
+  const size = map && map.alphaMaskSize;
+  if (!mask || !size || mask.length !== size * size) return null;
+  return {
+    alphaAt(u, v) {
+      if (u < 0 || u > 1 || v < 0 || v > 1) return 0; // off the square entirely -- never on-map
+      const px = Math.min(size - 1, Math.max(0, Math.floor(u * size)));
+      const py = Math.min(size - 1, Math.max(0, Math.floor(v * size)));
+      return mask.charCodeAt(py * size + px) === 49 /* '1' */ ? 255 : 0; // '0' is 48, '1' is 49
+    },
+  };
+}
+
 /** Reads `image`'s own alpha channel into a small lookup grid, drawn onto a fresh *transparent*
  * offscreen canvas (never the black-background stage canvas) so a genuinely transparent source
  * pixel reads back as alpha 0 rather than blended with black. 256px is plenty for a coarse
- * inside/outside-the-map read and keeps thousands of per-candidate lookups cheap. Can throw (some
- * browsers refuse to read canvas pixels back for a file:// page) -- every caller wraps this in
- * try/catch and treats a throw as "auto-detection unavailable" rather than a hard failure. */
+ * inside/outside-the-map read and keeps thousands of per-candidate lookups cheap. Fallback ONLY --
+ * see buildAlphaSamplerFromMask above for why this throws for most people (a page opened as a
+ * plain local file, which is the documented, expected way to use this viewer) -- every caller
+ * wraps this in try/catch and treats a throw as "this map has no precomputed mask AND this browser
+ * won't allow the fallback either" rather than a hard failure. */
 function buildAlphaSampler(image) {
   if (!image || !image.naturalWidth || !image.naturalHeight) return null;
   const SIZE = 256;
@@ -366,11 +393,18 @@ function collectCalibrationPoints(tracks) {
  * no candidate clears the confidence bar (AUTO_ORIENTATION_MIN_SCORE/_LEAD), in which case the
  * caller leaves the manual controls exactly as they were rather than force a guess. */
 function autoDetectOrientation(map, image, tracks) {
-  let sampler;
-  try {
-    sampler = buildAlphaSampler(image);
-  } catch {
-    return { error: "this browser won't allow reading the map image's pixels back (a canvas security restriction) -- manual controls still work" };
+  let sampler = buildAlphaSamplerFromMask(map);
+  if (!sampler) {
+    try {
+      sampler = buildAlphaSampler(image);
+    } catch {
+      return {
+        error: "this map has no precomputed alpha mask yet, and this browser won't allow reading " +
+          "the map image's pixels back directly either (a security restriction on a page opened as " +
+          "a plain local file) -- re-run scripts/Fetch-Assets.ps1 (no need for -Force) to add the " +
+          "mask this needs, or use the manual controls",
+      };
+    }
   }
   if (!sampler) return { error: 'map image not ready yet' };
 
@@ -583,6 +617,12 @@ function normalizeMapInfo(m) {
     uuid: m.uuid || m.Uuid || null,
     displayName: m.displayName || m.DisplayName || 'Unknown map',
     xMultiplier, yMultiplier, xScalarToAdd, yScalarToAdd,
+    // Only ever present on a catalog.js entry (Fetch-Assets.ps1 bakes these in) -- match.json's own
+    // embedded Map info never has them, which is fine: loadMapImage() below fills these in from the
+    // catalog once it looks up this map's image anyway. See buildAlphaSamplerFromMask's doc comment
+    // for what these are for.
+    alphaMask: m.alphaMask || m.AlphaMask || null,
+    alphaMaskSize: m.alphaMaskSize || m.AlphaMaskSize || 0,
   };
 }
 
@@ -1119,6 +1159,12 @@ function loadMapImage() {
     state.mapImage = null;
     return;
   }
+
+  // match.json's own embedded Map info (the `detected` path in resolveMap()) never carries the
+  // alpha mask -- only a catalog.js entry does -- so backfill it here now that this map's own
+  // catalog entry is in hand, regardless of which path set state.map.
+  state.map.alphaMask = entry.alphaMask || entry.AlphaMask || null;
+  state.map.alphaMaskSize = entry.alphaMaskSize || entry.AlphaMaskSize || 0;
 
   const img = new Image();
   img.onload = () => { state.mapImage = img; hideMapOverlay(); maybeAutoDetectOrientation(); };
