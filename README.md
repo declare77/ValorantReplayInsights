@@ -51,6 +51,20 @@ you already built yourself, the **Browse...** button next to the path box still 
 dotnet run --project src/VrfInsights.Gui
 ```
 
+**Want a real double-clickable `.exe` instead of that command (or a `.bat` wrapping it)?** Run
+this once from PowerShell in the project folder:
+
+```powershell
+.\scripts\Build-Gui-Exe.ps1 -Shortcut
+```
+
+This still needs the .NET SDK installed (once, same as everything else here), but the `.exe` it
+produces — `publish\gui\VrfInsights.Gui.exe` — is fully standalone (the .NET runtime is bundled
+inside it), so from then on you just double-click it, or the desktop shortcut `-Shortcut` creates
+for you. Re-run the script any time you pull code changes to rebuild it. If PowerShell refuses to
+run it (`running scripts is disabled on this system`), see the execution-policy note under
+"one-time setup" in the 2D replay viewer section below — same fix, same cause.
+
 ### Option B — one command (`run`)
 
 `vrf-insights run` wraps the same two steps (`vrfkit export` + `vrf-insights analyze`) into a
@@ -145,6 +159,25 @@ instead, which has normal internet access:
 ```powershell
 .\scripts\Fetch-Assets.ps1
 ```
+
+**If PowerShell refuses with `running scripts is disabled on this system`:** this is Windows'
+default script execution policy, not anything specific to this project — it blocks every `.ps1`
+(this one, `Build-Gui-Exe.ps1` below, any other). Easiest fix, just for this one run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Fetch-Assets.ps1
+```
+
+Or, to stop it asking every time (once, per Windows user account):
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+(then answer `Y` when it asks to confirm). If you downloaded this project as a `.zip`, Windows
+sometimes also flags the extracted files as "from the internet" and blocks them a second, different
+way — if the above doesn't fix it, right-click the `.ps1` file → **Properties** → **Unblock** (or
+run `Unblock-File .\scripts\Fetch-Assets.ps1`), then try again.
 
 This downloads every competitive map's minimap image and every agent's icon from Riot's own
 public content API into `assets/maps/`, `assets/agents/`, plus `assets/catalog.json` /
@@ -388,6 +421,8 @@ colored shape) specifically so you can check this yourself rather than take it o
   machine).
 - **`viewer/`** — the 2D replay viewer (plain HTML/CSS/JS, no build step); see above.
 - **`scripts/Fetch-Assets.ps1`** — downloads the viewer's map/agent art from valorant-api.com.
+- **`scripts/Build-Gui-Exe.ps1`** — publishes `VrfInsights.Gui` as a standalone, single-file
+  `.exe` (see Option A above) so it can be launched without `dotnet run` or a `.bat` file.
 
 ## Agent codenames
 
