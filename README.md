@@ -255,9 +255,11 @@ just sideways/upside-down, rather than the coordinate formula disagreeing with a
 picture; this one physically turns the drawn image and leaves dot positions using the plain,
 uncorrected formula:
 
-| Map | Rotation | Confirmed by |
-|---|---|---|
-| Ascent | 90° clockwise | Reported by a user — turning just the dot-position mapping (the mechanism above) didn't fix it, turning the picture itself did. Not yet independently cross-checked against a screenshot with known positions the way Sunset was, so if agents still land in the wrong rooms after this, the fix may need to go the other direction (270°) or use both mechanisms together |
+*(none confirmed yet — Ascent was tried here at 90°, and separately in the table above at 90°,
+both based on a visual impression rather than a real reference point; both reportedly made
+alignment worse, so neither is kept. Use the Debug info panel's per-player u/v numbers against an
+actual known position to work out the real fix — see "How to verify a map's rotation" below — before
+adding an entry.)*
 
 If you work out a good rotation for another map, add it to whichever of the two tables in `app.js`
 actually fixed it (one line) so nobody has to rediscover it — see "How to verify a map's rotation"
@@ -302,7 +304,12 @@ map entirely), open the **Debug info** panel below the roster after loading a ma
 every player's first recorded position and the exact normalized coordinate the map transform
 computes from it, with a "Copy debug info" button so you can hand that straight to whoever's
 troubleshooting it, no developer tools required. It also now says whether team sides (below) were
-resolved for that particular replay.
+resolved for that particular replay, and lists every player's movement-sample count — including
+0 for a player who never had a single position recorded at all (as opposed to one whose position
+is merely off-map), which is the signature of only seeing one team on the map: see the panel's own
+explanation of why that happens (in short — the norm for a .vrf recorded from a player's own
+client, not a bug — the recording player's client only ever received position updates for enemies
+it had actually seen).
 
 The same panel also lists every entry in `state.utility` (from `utility.json`) — class path,
 category, world/normalized position, spawn/despawn time, and whether it's active at the current

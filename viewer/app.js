@@ -165,14 +165,12 @@ function defaultOrientation(mapUuid) {
 // underneath them turns. The two are independent and can be combined if a map genuinely needs
 // both, but start with only one and see if that alone lines everything up.
 const MAP_IMAGE_ROTATIONS = {
-  // Ascent -- reported by a user: the downloaded minimap picture itself appeared rotated (not the
-  // dot positions -- turning just the coordinate mapping, tried first, didn't fix it), and
-  // rotating the picture 90° clockwise was the fix they asked for. Not yet independently
-  // cross-checked against a screenshot with known player positions the way Sunset was -- if
-  // agents still don't land in the right rooms after this, tell me and we'll try the other
-  // direction (270°) or add KNOWN_MAP_ORIENTATIONS compensation on top instead.
-  // (https://valorant-api.com/v1/maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319 confirms this uuid.)
-  '7eaecc1b-4337-bbf6-6ab9-04b8f06b3319': 90,
+  // Ascent was tried here at 90 (and, before that, in KNOWN_MAP_ORIENTATIONS' dot-position table
+  // at 90) based on a user's visual impression -- both guesses reportedly made alignment WORSE,
+  // not better, which means neither guess should be trusted, including a further blind guess at
+  // 180/270. Left empty (no correction) until it's pinned down from the Debug info panel's actual
+  // u/v numbers against a real known reference point, the same way Sunset's entry was derived --
+  // see the "How to verify a map's rotation" section in the README before adding an entry here.
 };
 
 /** Draws the current map image, physically rotated per MAP_IMAGE_ROTATIONS if this map has an
@@ -843,19 +841,30 @@ function logSpawnDebugInfo() {
     return;
   }
 
+  // Every player.json/movement.json entry is listed here, INCLUDING one with zero movement
+  // samples at all -- that's a real, distinct failure mode ("this player never got a single
+  // position") from one whose first sample just lands outside the image, and the two look
+  // identical if a track with no samples is silently skipped instead (which this used to do,
+  // and which is exactly how a whole missing team could go undiagnosed -- it would just never
+  // show up in this list, instead of showing up with an obvious "no movement samples" flag).
   const rows = state.tracks.map((track) => {
+    const player = (track.Player && (track.Player.AgentName || playerKey(track.Player))) || '(unknown)';
+    const sampleCount = (track.Samples && track.Samples.length) || 0;
     const sample = track.Samples && track.Samples[0];
-    if (!sample) return null;
+    if (!sample) {
+      return { player, sampleCount, PosX: '-', PosY: '-', u: '-', v: '-', insideImage: '-' };
+    }
     const uv = worldToUv(sample.PosX, sample.PosY, state.map);
     return {
-      player: (track.Player && (track.Player.AgentName || playerKey(track.Player))) || '(unknown)',
+      player,
+      sampleCount,
       PosX: Number(sample.PosX.toFixed(1)),
       PosY: Number(sample.PosY.toFixed(1)),
       u: Number(uv.u.toFixed(4)),
       v: Number(uv.v.toFixed(4)),
       insideImage: uv.u >= 0 && uv.u <= 1 && uv.v >= 0 && uv.v <= 1,
     };
-  }).filter(Boolean);
+  });
 
   const lines = [];
   lines.push('Map: ' + state.map.displayName);
@@ -871,10 +880,20 @@ function logSpawnDebugInfo() {
     ? 'resolved (' + state.match.Sides.length + ' round(s) -- spike-carrier + spawn-cluster method, see README)'
     : 'not determined for this replay -- falling back to individual per-player colors'));
   lines.push('');
+  lines.push('Players (from movement.json) -- ' + rows.length + ' total, ' +
+    rows.filter((r) => r.sampleCount > 0).length + ' with at least one movement sample. A player ' +
+    'with 0 samples never had a single position recorded anywhere in movement.parquet (this ' +
+    'project never invents one) -- if that\'s a whole enemy team, the likely cause is that the ' +
+    '.vrf was recorded from one player\'s own client, which (like the live game itself) only ever ' +
+    'receives position updates for enemies it has actually seen -- an enemy never spotted the ' +
+    'whole match would genuinely have zero recorded positions, not a bug in this project. If it\'s ' +
+    'a teammate (someone who should always be visible to the recording player) missing instead, ' +
+    'that points at an identity-resolution mismatch between player.json and movement.parquet\'s ' +
+    'character GUIDs instead.');
   lines.push('Spawn-frame positions (u/v should be within 0..1 to land on the map image):');
-  lines.push(['player', 'PosX', 'PosY', 'u', 'v', 'insideImage'].join('\t'));
+  lines.push(['player', 'sampleCount', 'PosX', 'PosY', 'u', 'v', 'insideImage'].join('\t'));
   for (const r of rows) {
-    lines.push([r.player, r.PosX, r.PosY, r.u, r.v, r.insideImage].join('\t'));
+    lines.push([r.player, r.sampleCount, r.PosX, r.PosY, r.u, r.v, r.insideImage].join('\t'));
   }
 
   // Utility markers (state.utility, from utility.json) -- added to help pin down "still shows up
