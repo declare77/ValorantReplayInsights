@@ -112,19 +112,23 @@ Default is 10/sec, which is still smooth once the viewer interpolates between sa
 GUI always uses the default of 10). If you already have an old, oversized `movement.json` from
 before this existed, delete it and re-run `analyze`/`run`.
 
-Three diagnostic commands help you verify or extend the assumptions below against your own export:
+Four diagnostic commands help you verify or extend the assumptions below against your own export:
 
 ```bash
 dotnet run --project src/VrfInsights.Cli -- dump-fields ./export --group Comp_AbilityStatisticsReplicator
 dotnet run --project src/VrfInsights.Cli -- dump-values ./export --field CastLocation
 dotnet run --project src/VrfInsights.Cli -- dump-classes ./export
+dotnet run --project src/VrfInsights.Cli -- dump-actors ./export --class Smoke
 ```
 
-`dump-fields` shows you the real `field_name`s (dump-fields already caught one wrong assumption
-this way — `CastLocation` doesn't flatten into `.X`/`.Y`/`.Z` children after all, see below).
-`dump-values` goes a level deeper once you have a real name in hand: it prints the actual
-per-row values (every `Value*` column, plus a hex preview of `RawBits`) for fields matching a
-substring, so you can see *how* a field is encoded instead of guessing from its name.
+`dump-fields` shows you the real `field_name`s (this already caught one wrong assumption —
+`CastLocation` doesn't flatten into `.X`/`.Y`/`.Z` children after all, it's fixed now, see below).
+`dump-values` goes a level deeper once you have a real name in hand: it prints the actual per-row
+values (every `Value*` column, plus a hex preview of `RawBits`) for fields matching a substring,
+so you can see *how* a field is encoded instead of guessing from its name. `dump-classes`/
+`dump-actors` are the equivalent pair for `actors.parquet`: `dump-classes` lists the class names
+that exist, `dump-actors` shows the actual open/close/spawn-position rows for a class, so you can
+see whether an actor is reused across the match or fresh per use.
 
 ## 2D replay viewer
 
@@ -336,17 +340,33 @@ What's schema-verified against vrfkit's own documentation and source (`docs/USAG
   vrfkit's own `tools/extract_spike_carrier.py` uses to find the planter, per `docs/DATA.md`'s
   "Spike carrier"/"Planter" rows.
 
-**Known broken, confirmed against a real export (not a guess anymore):** `AbilityCastBuilder`
-assumed `CastLocation` (an `FVector`) flattens into `CastLocation.X`/`.Y`/`.Z` child fields, the
-way some other nested members do elsewhere. `dump-fields` against a real replay showed this is
-wrong — `CastLocation` comes through as a single field (`CastLocation_21_<hash>`, no `.X`/`.Y`/`.Z`
-suffix at all), so `CastX`/`CastY`/`CastZ` in `ability_casts.json` are always `null` right now, and
-the viewer's ability-cast markers never draw. Fixing this needs `dump-values` to see how that
-single field is actually encoded (a formatted string? raw bits that need manual float decoding?)
-before writing a real decoder instead of guessing a second naming scheme — see the command above.
+**Fixed, and confirmed against a real export rather than guessed:** `AbilityCastBuilder` used to
+assume `CastLocation` (an `FVector`) flattens into `CastLocation.X`/`.Y`/`.Z` child fields, the way
+some other nested members do elsewhere, and that every member's `field_name` was the plain
+readable name (`Player`, `Slot`, `Round`, ...). Both turned out wrong: `dump-fields` against a real
+replay showed every member of `AbilityCastsThisRound` carries vrfkit's own disambiguation suffix
+(`Player_11_<hash>`, `CastLocation_21_<hash>`, etc. — the numeric/hash part isn't stable across
+builds), and `dump-values` showed `CastLocation` is one field whose value is a bare `(X,Y,Z)`
+string, not three separate fields. `AbilityCastBuilder` now matches members by name *prefix*
+(tolerating the suffix) and parses that string directly — see its own doc comment, and
+`AbilityCastBuilderTests.cs` for tests built from the real field names/values above.
+
+**Known broken, still under investigation:** smoke/molly/grenade/etc. markers in the viewer
+(`utility.json`, `UtilityTimelineBuilder`) mostly land at the casting player's spawn point instead
+of the real effect location. The likely cause: `UtilityTimelineBuilder` positions a marker using
+`actors.parquet`'s `spawn_x`/`spawn_y` — a one-time snapshot of where that actor's game object was
+when its network channel first opened — which is exactly the thing vrfkit's own docs warn isn't
+the same as a cast's real location (see `AbilityCastBuilder`'s remarks: `AbilityCastsThisRound` is
+called out as the one signal that attributes a real cast location, "rather than only observing a
+caster-side actor spawn"). If a given ability's effect actor is either reused across the whole
+match (equipped once near round start) or spawned once at the moment of throw (so its recorded
+position is the launch point, not the landing spot), you'd see exactly this symptom. Not fixed yet
+because it needs real evidence first — run `dump-classes` to find the exact class name for a
+smoke/molly/grenade, then `dump-actors --class <that name>` to see whether its actor is reused or
+fresh per cast, and whether its recorded spawn position tracks the real effect location or not.
 
 What's a documented **assumption**, flagged in code comments, and worth checking with
-`dump-fields`/`dump-values`/`dump-classes` against your own export before trusting:
+`dump-fields`/`dump-values`/`dump-classes`/`dump-actors` against your own export before trusting:
 
 - `MoneyManagementComponent`'s rows are joined to a player by `actor_net_guid` directly, assuming
   it replicates on the player's own PlayerState actor rather than a subobject.

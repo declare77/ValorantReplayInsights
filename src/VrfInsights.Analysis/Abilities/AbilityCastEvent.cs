@@ -14,8 +14,9 @@ namespace VrfInsights.Analysis.Abilities;
 /// directly, since the array re-sends on every later replication and later sends carry a
 /// growing, no-longer-meaningful timestamp for the original cast (per vrfkit's docs/DATA.md
 /// "Abilities" section).</param>
-/// <param name="CastX">Null if this export's flattening of the CastLocation vector doesn't
-/// match the child-field naming this project assumes — see <see cref="AbilityCastBuilder"/>.</param>
+/// <param name="CastX">Null if this export's <c>CastLocation</c> member is missing or isn't in
+/// the <c>(X,Y,Z)</c> string format this project has confirmed against a real export — see
+/// <see cref="AbilityCastBuilder"/>.</param>
 public sealed record AbilityCastEvent(
     string? Subject,
     long? Slot,

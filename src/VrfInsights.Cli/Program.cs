@@ -23,6 +23,7 @@ public static class Program
                 "dump-fields" => await RunDumpFieldsAsync(args[1..]),
                 "dump-classes" => await RunDumpClassesAsync(args[1..]),
                 "dump-values" => await RunDumpValuesAsync(args[1..]),
+                "dump-actors" => await RunDumpActorsAsync(args[1..]),
                 "-h" or "--help" or "help" => PrintUsageAndReturn(),
                 _ => PrintUnknownCommand(args[0]),
             };
@@ -102,8 +103,8 @@ public static class Program
     }
 
     // Diagnostic helper: print distinct field_name values under a group_path substring, so you
-    // can confirm the exact naming this project's builders assume (see AbilityCastBuilder's
-    // CastLocation.X/.Y/.Z assumption) against your own export.
+    // can confirm the exact naming this project's builders assume against your own export (this
+    // is exactly how AbilityCastBuilder's old CastLocation.X/.Y/.Z assumption was caught wrong).
     private static async Task<int> RunDumpFieldsAsync(string[] args)
     {
         string? exportDir = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : null;
@@ -179,6 +180,52 @@ public static class Program
         else
         {
             Console.WriteLine($"(showing {shown} matching row(s), --limit {limit})");
+        }
+
+        return 0;
+    }
+
+    // Diagnostic helper: print actors.parquet's own row-level lifecycle (time, event, spawn
+    // position) for actors whose class_path matches a substring -- to see whether a given
+    // ability's actor is a single instance reused across the whole match (recorded spawn position
+    // is stale from creation) or a fresh instance per cast (recorded spawn position is the launch
+    // point, not necessarily where the effect ends up). Complements dump-values, which only looks
+    // at fields.parquet.
+    private static async Task<int> RunDumpActorsAsync(string[] args)
+    {
+        string? exportDir = args.Length > 0 && !args[0].StartsWith("--", StringComparison.Ordinal) ? args[0] : null;
+        string? classFilter = GetOption(args, "--class");
+        int limit = int.Parse(GetOption(args, "--limit") ?? "30", System.Globalization.CultureInfo.InvariantCulture);
+
+        if (exportDir is null || classFilter is null)
+        {
+            Console.Error.WriteLine("usage: vrf-insights dump-actors <vrfkit-export-dir> --class <substring> [--limit 30]");
+            return 1;
+        }
+
+        VrfExportSet export = await VrfExportSet.LoadAsync(exportDir);
+        var sorted = export.Actors
+            .Where(a => a.ClassPath is not null && a.ClassPath.Contains(classFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(a => a.TimeMs)
+            .ToList();
+
+        int shown = 0;
+        foreach (var row in sorted)
+        {
+            Console.WriteLine(
+                $"t={row.TimeMs} actor={row.ActorNetGuid} event={row.Event} class={row.ClassPath} " +
+                $"spawnX={row.SpawnX?.ToString() ?? "null"} spawnY={row.SpawnY?.ToString() ?? "null"} spawnZ={row.SpawnZ?.ToString() ?? "null"}");
+
+            if (++shown >= limit) break;
+        }
+
+        if (shown == 0)
+        {
+            Console.WriteLine("(no rows matched -- check --class against dump-classes output)");
+        }
+        else
+        {
+            Console.WriteLine($"(showing {shown} of {sorted.Count} matching row(s), --limit {limit})");
         }
 
         return 0;
@@ -280,6 +327,12 @@ public static class Program
               dump-classes <export-dir>
                   Print distinct actor class_path values seen in actors.parquet — useful for
                   extending VrfInsights.Analysis.Utility.UtilityEffectClassifier's keyword table.
+
+              dump-actors <export-dir> --class <substring> [--limit 30]
+                  Print actors.parquet's own row-level lifecycle (time, event, spawn position) for
+                  actors whose class_path contains --class — use this after dump-classes to see
+                  whether an ability's actor is reused across the match or fresh per cast, and
+                  whether its recorded spawn position tracks the real effect location.
             """);
     }
 }
