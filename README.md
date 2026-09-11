@@ -240,23 +240,36 @@ wrong. Three ways this gets fixed, in the order the viewer itself tries them:
    map that isn't already covered by #2 below, the viewer tries all 4 rotations × flip/no-flip
    itself: every downloaded competitive-map image has its four corners fully transparent (only the
    actual playable shape is opaque), so a real recorded position can only ever be correct sitting
-   on an opaque pixel — never one of those corners. It transforms every player's every recorded
-   position by each of the 8 possibilities and picks whichever one lands almost all of them on
-   opaque pixels, *only* when one candidate clearly, confidently wins (see `AUTO_ORIENTATION_MIN_SCORE`/
-   `_MIN_LEAD` in `viewer/app.js` for the exact bar) — otherwise it leaves the manual controls alone
-   rather than force a low-confidence guess. This runs automatically; there's nothing to click. The
-   **Debug info** panel's "Automatic orientation calibration" line always says what happened —
-   applied (with the winning and runner-up scores), inconclusive (and why), or not run (already
-   covered by #2, or already has a saved value) — so it's never a silent black box.
+   on an opaque pixel — never one of those corners. For each of the 8 rotate/flip candidates, it
+   also fits its own best-guess **scale + recentering pan** from the recorded footprint's own
+   spread before scoring it — rotating and flipping alone can never fix a match whose whole raw
+   footprint simply doesn't fit inside the image square yet (rotation/flip preserve every point's
+   distance from the center exactly, so if a point is already too far out, no amount of turning it
+   around the center brings it back in — only zooming/panning can), which real data from Ascent
+   showed is often the actual problem, not the rotation. It picks whichever fitted candidate lands
+   almost all points on opaque pixels, *only* when one candidate clearly, confidently wins (see
+   `AUTO_ORIENTATION_MIN_SCORE`/`_MIN_LEAD` in `viewer/app.js` for the exact bar) — otherwise it
+   leaves the manual controls alone rather than force a low-confidence guess. This runs
+   automatically; there's nothing to click. The **Debug info** panel's "Automatic orientation
+   calibration" line always says what happened — applied (with the fitted rotation, flip, scale,
+   pan, and the winning/runner-up scores), inconclusive (and why), or not run (already covered by
+   #2, or already has a saved value) — so it's never a silent black box.
 2. A handful of maps additionally have a **known-good rotation hand-confirmed and built in** (see
    the table below), from back before automatic calibration existed — those take priority over #1
    and are never recomputed.
 3. For anything #1 couldn't confidently resolve, or if you just want to override it, use the **Map
-   orientation** control (rotate 0/90/180/270°, plus a flip checkbox) next to the facing offset to
-   correct it by eye. It's per-map and remembered in your browser (`localStorage`) once set — by you
-   *or* by #1 — so it only ever needs setting once per map, and a **Reset map fit** button puts it
-   back to whatever #1 or #2 computed (or 0°/no flip if neither found anything) if you want to start
-   over.
+   orientation** control (rotate 0/90/180/270°, plus a flip checkbox, plus the Scale/Pan sliders
+   described further down) next to the facing offset to correct it by eye. It's per-map and
+   remembered in your browser (`localStorage`) once set — by you *or* by #1 — so it only ever needs
+   setting once per map, and a **Reset map fit** button clears that saved value, re-runs automatic
+   calibration immediately (no reload needed), and lands the controls on whatever #1 or #2 comes up
+   with (or 0°/no flip/1×/no pan if neither found anything).
+
+   If you were on an earlier build and a map still looks wrong after clicking **Reset map fit**,
+   that's expected the first time: a manually-chosen rotation saved from before this fix existed
+   used to make Reset just re-save the same fallback value, which silently prevented automatic
+   calibration from ever running again for that map. Reset now actually clears the saved value
+   first, so a single click gets you the improved auto-fit.
 
 **Maps with a confirmed rotation built in** (`KNOWN_MAP_ORIENTATIONS` in `viewer/app.js`) — this
 one moves where each dot lands, without touching the downloaded picture itself:
@@ -288,13 +301,17 @@ itself looks sideways (walls/rooms rotated relative to what the dots are doing),
 
 If positions are pointed in the right general direction but still look a little off-center —
 clipping into walls that aren't near the real spawn, or drifting slightly away from the correct
-rooms — that's a smaller, separate problem: the downloaded map image's content might not fill the
-exact same square Riot's coordinate formula was calibrated against (valorant-api.com's
+rooms — that's a separate problem from rotation: the downloaded map image's content might not fill
+the exact same square Riot's coordinate formula was calibrated against (valorant-api.com's
 `displayIcon` is a separate asset, not necessarily pixel-identical to whatever the game client
 renders internally). The **Scale** and **Pan X%/Y%** controls next to Map orientation compensate
 for that — Scale zooms in/out around the image center, the two Pan fields shift it — also
-remembered per map. In practice this tends to be a small correction (a few percent), not the main
-source of misalignment — get rotation right first. The Pan sliders move in tenths of a percent
+remembered per map. For a map covered by #1 above this is normally already fit automatically (it's
+what the "scale, pan" part of automatic calibration is doing), so manual Scale/Pan is mainly for
+fine-tuning after that, or for a `KNOWN_MAP_ORIENTATIONS` map (#2), where it's still a small,
+by-eye correction — a few percent, not the main source of misalignment. Whatever the size of the
+correction turns out to be, get rotation right first, since scale/pan are fit (or should be
+adjusted) around whatever rotation is already selected. The Pan sliders move in tenths of a percent
 (not whole percent), since a full 1% step moved players much further than intended for a
 fine-tuning control.
 

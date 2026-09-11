@@ -158,7 +158,9 @@ function defaultOrientation(mapUuid) {
   // anything -- so "Reset map fit" and a fresh page load both land on the computed value instead
   // of blank 0/no-flip once one's been found.
   const auto = mapUuid && autoDetectedOrientations[mapUuid];
-  if (auto && !auto.error) return { rotate: auto.rotate, flipH: auto.flipH, scale: 1, offsetX: 0, offsetY: 0 };
+  if (auto && !auto.error) {
+    return { rotate: auto.rotate, flipH: auto.flipH, scale: auto.scale, offsetX: auto.offsetX, offsetY: auto.offsetY };
+  }
   return { rotate: 0, flipH: false, scale: 1, offsetX: 0, offsetY: 0 };
 }
 
@@ -227,6 +229,19 @@ const AUTO_ORIENTATION_CANDIDATES = [
 const AUTO_ORIENTATION_MIN_SCORE = 0.75; // winning candidate must land at least this often
 const AUTO_ORIENTATION_MIN_LEAD = 0.12; // ...and beat the runner-up by at least this much
 const AUTO_ORIENTATION_MIN_VOID_FRACTION = 0.02; // image must have at least this much real transparency to calibrate against at all
+// Rotation/flip alone can only ever be right when the recorded footprint already happens to be
+// scaled/centered the same way the downloaded image is. Real data (Ascent) showed that's often not
+// true at all -- one team's spawn can sit more than 3x farther from center than the other's, and
+// hundreds of utility markers across a match can fall well outside [0,1] on both axes, no matter
+// which of the 8 rotate/flip candidates is tried. Rotation and flip are both isometries about the
+// center point, so they preserve every point's distance from center exactly -- meaning no amount of
+// rotating/flipping can ever pull a point back inside [0,1] if it's already too far out. Only a
+// scale (zoom) + recentering offset can fix that. So each candidate below is fit with its own
+// best-guess scale/offset (from the recorded footprint's own robust extent) before being scored --
+// the scoring then has to fall back on actual pixel shape to pick a winner, not just "did I forget
+// to zoom out enough".
+const AUTO_ORIENTATION_TRIM = 0.01; // trim the extreme 1% of points on each side per axis before measuring the footprint's extent, so a handful of rare stray/glitched samples can't blow up the fit
+const AUTO_ORIENTATION_TARGET_HALF_EXTENT = 0.46; // fit the footprint to +/-46% from center (an ~8% margin so it doesn't touch the image edge exactly)
 
 // mapUuid -> { rotate, flipH, score, scores } on success, or { error, scores? } when inconclusive.
 // Session-only (not persisted itself -- a successful result gets persisted like any manual choice
@@ -243,6 +258,47 @@ function rotateFlipAroundCenter(u, v, rotate, flipH) {
     case 270: { const nx = y, ny = -x; x = nx; y = ny; break; }
     default: break;
   }
+  return { u: x + 0.5, v: y + 0.5 };
+}
+
+/** Value at percentile `p` (0..1) of an already-sorted numeric array. */
+function percentileOf(sortedArr, p) {
+  if (sortedArr.length === 0) return 0;
+  const idx = Math.min(sortedArr.length - 1, Math.max(0, Math.round(p * (sortedArr.length - 1))));
+  return sortedArr[idx];
+}
+
+/** Given a candidate (rotate, flipH) and every recorded point (already run through worldToUv, so
+ * still in the *unrotated* [0,1]-ish space), works out the uniform scale + recentering offset that
+ * would fit that candidate's rotated/flipped footprint snugly inside the image square -- the
+ * scale+offset a person would land on by eye if they nudged the sliders themselves. Robust to a
+ * handful of stray points via AUTO_ORIENTATION_TRIM; uses ONE scale for both axes (not independent
+ * x/y stretch) so the map's own proportions aren't distorted, sized off whichever axis is wider. */
+function fitScaleOffset(points, candidate) {
+  const xs = [], ys = [];
+  for (const p of points) {
+    const rf = rotateFlipAroundCenter(p.u, p.v, candidate.rotate, candidate.flipH);
+    xs.push(rf.u - 0.5);
+    ys.push(rf.v - 0.5);
+  }
+  xs.sort((a, b) => a - b);
+  ys.sort((a, b) => a - b);
+  const xLo = percentileOf(xs, AUTO_ORIENTATION_TRIM), xHi = percentileOf(xs, 1 - AUTO_ORIENTATION_TRIM);
+  const yLo = percentileOf(ys, AUTO_ORIENTATION_TRIM), yHi = percentileOf(ys, 1 - AUTO_ORIENTATION_TRIM);
+  const midX = (xLo + xHi) / 2, midY = (yLo + yHi) / 2;
+  const halfW = Math.max(1e-6, (xHi - xLo) / 2);
+  const halfH = Math.max(1e-6, (yHi - yLo) / 2);
+  const scale = AUTO_ORIENTATION_TARGET_HALF_EXTENT / Math.max(halfW, halfH);
+  return { scale, offsetX: -midX * scale, offsetY: -midY * scale };
+}
+
+/** Applies a candidate's rotate/flip AND its fitted scale/offset to one worldToUv'd point, in the
+ * exact same order applyOrientation() uses live (rotate/flip about center, then scale, then pan) --
+ * so what's scored here is exactly what would end up on screen if this candidate were picked. */
+function applyCandidateFit(u, v, candidate, fit) {
+  const rf = rotateFlipAroundCenter(u, v, candidate.rotate, candidate.flipH);
+  const x = (rf.u - 0.5) * fit.scale + fit.offsetX;
+  const y = (rf.v - 0.5) * fit.scale + fit.offsetY;
   return { u: x + 0.5, v: y + 0.5 };
 }
 
@@ -323,19 +379,22 @@ function autoDetectOrientation(map, image, tracks) {
     return { error: 'this map image has only ' + (voidFraction * 100).toFixed(1) + '% transparent area -- not enough of a void margin to calibrate rotation against for this map' };
   }
 
-  const points = collectCalibrationPoints(tracks);
-  if (points.length < 20) {
-    return { error: 'not enough recorded positions in this replay to calibrate from (' + points.length + ')' };
+  const samples = collectCalibrationPoints(tracks);
+  if (samples.length < 20) {
+    return { error: 'not enough recorded positions in this replay to calibrate from (' + samples.length + ')' };
   }
+  // worldToUv doesn't depend on the candidate being tried, so run it once per sample rather than
+  // once per (sample, candidate) pair.
+  const points = samples.map((s) => worldToUv(s.PosX, s.PosY, map));
 
   const scores = AUTO_ORIENTATION_CANDIDATES.map((candidate) => {
+    const fit = fitScaleOffset(points, candidate);
     let onMap = 0;
-    for (const s of points) {
-      const uv = worldToUv(s.PosX, s.PosY, map);
-      const oriented = rotateFlipAroundCenter(uv.u, uv.v, candidate.rotate, candidate.flipH);
+    for (const p of points) {
+      const oriented = applyCandidateFit(p.u, p.v, candidate, fit);
       if (sampler.alphaAt(oriented.u, oriented.v) > 40) onMap++;
     }
-    return { candidate, score: onMap / points.length };
+    return { candidate, fit, score: onMap / points.length };
   });
   scores.sort((a, b) => b.score - a.score);
 
@@ -348,7 +407,15 @@ function autoDetectOrientation(map, image, tracks) {
     };
   }
 
-  return { rotate: best.candidate.rotate, flipH: best.candidate.flipH, score: best.score, scores };
+  return {
+    rotate: best.candidate.rotate,
+    flipH: best.candidate.flipH,
+    scale: best.fit.scale,
+    offsetX: best.fit.offsetX,
+    offsetY: best.fit.offsetY,
+    score: best.score,
+    scores,
+  };
 }
 
 /** Runs auto-detection at most once per map per browser session, and only when there's nothing
@@ -369,13 +436,17 @@ function maybeAutoDetectOrientation() {
   const result = autoDetectOrientation(state.map, state.mapImage, state.tracks);
   autoDetectedOrientations[uuid] = result;
   if (!result.error) {
-    // Guards against the extremely unlikely race of a person manually setting rotate/flip while
+    // Guards against the extremely unlikely race of a person manually adjusting any control while
     // this async image load was still in flight -- don't clobber a choice they just made.
-    if (mapOrientation.rotate === 0 && !mapOrientation.flipH) {
+    const untouched = mapOrientation.rotate === 0 && !mapOrientation.flipH &&
+      mapOrientation.scale === 1 && !mapOrientation.offsetX && !mapOrientation.offsetY;
+    if (untouched) {
       mapOrientation.rotate = result.rotate;
       mapOrientation.flipH = result.flipH;
-      mapRotateSelect.value = String(result.rotate);
-      mapFlipCheckbox.checked = result.flipH;
+      mapOrientation.scale = result.scale;
+      mapOrientation.offsetX = result.offsetX;
+      mapOrientation.offsetY = result.offsetY;
+      syncOrientationControlsFromState();
       saveMapOrientation(uuid);
     }
   }
@@ -399,8 +470,12 @@ function describeAutoDetection(uuid) {
   if (result.error) {
     return 'ran, inconclusive -- ' + result.error + (result.scores ? '  [' + fmtScores(result.scores) + ']' : '');
   }
-  return 'applied -- rotate=' + result.rotate + ' flipH=' + result.flipH + ' (' + (result.score * 100).toFixed(0) +
-    '% of recorded positions landed on the map image)  [' + fmtScores(result.scores) + ']';
+  return 'applied -- rotate=' + result.rotate + ' flipH=' + result.flipH +
+    ' scale=' + result.scale.toFixed(2) +
+    ' offsetX=' + (Math.round(result.offsetX * 1000) / 10).toFixed(1) + '%' +
+    ' offsetY=' + (Math.round(result.offsetY * 1000) / 10).toFixed(1) + '%' +
+    ' (' + (result.score * 100).toFixed(0) + '% of recorded positions landed on the map image)  [' +
+    fmtScores(result.scores) + ']';
 }
 
 function loadMapOrientation(mapUuid) {
@@ -934,6 +1009,27 @@ function resolveMap() {
   loadMapImage();
 }
 
+/** Pushes the current mapOrientation values into every slider/select/readout in the Map orientation
+ * panel, without touching mapOrientation itself or persisting anything -- the one place all of
+ * applyLoadedOrientation / maybeAutoDetectOrientation / "Reset map fit" go to keep the controls in
+ * sync with state, so a value computed programmatically (loaded, auto-detected, or reset) always
+ * shows up in the UI exactly like a person's own manual drag would have. */
+function syncOrientationControlsFromState() {
+  const o = mapOrientation;
+  mapRotateSelect.value = String(o.rotate);
+  mapFlipCheckbox.checked = o.flipH;
+  mapScaleInput.value = String(o.scale);
+  // Rounded to 0.1% (matching the sliders' step="0.1") rather than a whole percent -- panning
+  // used to jump by whole percentage points per tick, which was much too coarse.
+  const offsetXPct = Math.round(o.offsetX * 1000) / 10;
+  const offsetYPct = Math.round(o.offsetY * 1000) / 10;
+  mapOffsetXInput.value = String(offsetXPct);
+  mapOffsetYInput.value = String(offsetYPct);
+  mapScaleValue.textContent = o.scale.toFixed(2);
+  mapOffsetXValue.textContent = offsetXPct.toFixed(1) + '%';
+  mapOffsetYValue.textContent = offsetYPct.toFixed(1) + '%';
+}
+
 /** Loads this map's remembered orientation correction (if any) into state + the UI controls. */
 function applyLoadedOrientation() {
   const loaded = loadMapOrientation(state.map && state.map.uuid);
@@ -942,16 +1038,7 @@ function applyLoadedOrientation() {
   mapOrientation.scale = loaded.scale;
   mapOrientation.offsetX = loaded.offsetX;
   mapOrientation.offsetY = loaded.offsetY;
-  mapRotateSelect.value = String(loaded.rotate);
-  mapFlipCheckbox.checked = loaded.flipH;
-  mapScaleInput.value = String(loaded.scale);
-  // Rounded to 0.1% (matching the sliders' step="0.1") rather than a whole percent -- panning
-  // used to jump by whole percentage points per tick, which was much too coarse.
-  mapOffsetXInput.value = String(Math.round(loaded.offsetX * 1000) / 10);
-  mapOffsetYInput.value = String(Math.round(loaded.offsetY * 1000) / 10);
-  mapScaleValue.textContent = loaded.scale.toFixed(2);
-  mapOffsetXValue.textContent = (Math.round(loaded.offsetX * 1000) / 10).toFixed(1) + '%';
-  mapOffsetYValue.textContent = (Math.round(loaded.offsetY * 1000) / 10).toFixed(1) + '%';
+  syncOrientationControlsFromState();
 }
 
 // Sliders update mapOrientation and the on-screen readout live on every drag tick ('input', fires
@@ -989,17 +1076,26 @@ mapOffsetYInput.addEventListener('input', () => {
 });
 mapOffsetYInput.addEventListener('change', persistOrientationChange);
 btnResetOrientation.addEventListener('click', () => {
-  const fresh = defaultOrientation(state.map && state.map.uuid);
+  const uuid = state.map && state.map.uuid;
+  // Clear the saved value outright (rather than overwriting it with a fresh save, which is what
+  // this used to do) -- an overwrite here would immediately re-persist whatever defaultOrientation
+  // falls back to, which permanently blocks maybeAutoDetectOrientation's "already saved for this
+  // map" guard from ever letting the automatic calibration run again. Also drop this map's cached
+  // auto-detect result so it's free to recompute rather than reusing a stale one.
+  if (uuid) {
+    try { localStorage.removeItem(orientationStorageKey(uuid)); } catch { /* ignore */ }
+    delete autoDetectedOrientations[uuid];
+  }
+  const fresh = defaultOrientation(uuid);
   Object.assign(mapOrientation, fresh);
-  mapRotateSelect.value = String(fresh.rotate);
-  mapFlipCheckbox.checked = fresh.flipH;
-  mapScaleInput.value = '1';
-  mapOffsetXInput.value = '0';
-  mapOffsetYInput.value = '0';
-  mapScaleValue.textContent = '1.00';
-  mapOffsetXValue.textContent = '0.0%';
-  mapOffsetYValue.textContent = '0.0%';
-  persistOrientationChange();
+  syncOrientationControlsFromState();
+  // Re-run calibration immediately (rather than waiting for a future reload) so Reset actually
+  // takes effect right away when the map image is already loaded.
+  if (uuid && state.mapImage) {
+    maybeAutoDetectOrientation();
+  } else if (state.tracks.length > 0) {
+    logSpawnDebugInfo();
+  }
 });
 
 function loadMapImage() {
