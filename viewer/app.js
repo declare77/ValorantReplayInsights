@@ -72,10 +72,27 @@ const mapOrientation = { rotate: 0, flipH: false, scale: 1, offsetX: 0, offsetY:
 
 function orientationStorageKey(mapUuid) { return 'vrf-map-orientation:' + mapUuid; }
 
-function defaultOrientation() { return { rotate: 0, flipH: false, scale: 1, offsetX: 0, offsetY: 0 }; }
+// Known-good starting orientations, worked out once by comparing a replay's positions against a
+// real in-game screenshot with known player locations, so nobody has to rediscover them per map.
+// This is OUR OWN empirical finding, not part of Riot's published data -- it doesn't come from
+// (and isn't overwritten by) Fetch-Assets.ps1. If a map isn't listed here, the manual sliders
+// below still work exactly as before; add an entry once a map's correct rotate/flip is confirmed
+// (see README's map-orientation section for how to verify one).
+const KNOWN_MAP_ORIENTATIONS = {
+  // Sunset -- confirmed twice: matches a player's own room-by-room read of a live match, and
+  // separately matches 8 of 10 real player positions from a screenshot to within a few % of the
+  // map (see README). The remaining two were players sprinting at that exact instant, not a
+  // problem with the rotation itself.
+  '92584fbe-486a-b1b2-9faa-39b0f486b498': { rotate: 90, flipH: true },
+};
+
+function defaultOrientation(mapUuid) {
+  const known = mapUuid && KNOWN_MAP_ORIENTATIONS[mapUuid];
+  return { rotate: known ? known.rotate : 0, flipH: known ? known.flipH : false, scale: 1, offsetX: 0, offsetY: 0 };
+}
 
 function loadMapOrientation(mapUuid) {
-  const fallback = defaultOrientation();
+  const fallback = defaultOrientation(mapUuid);
   try {
     const raw = mapUuid ? localStorage.getItem(orientationStorageKey(mapUuid)) : null;
     if (!raw) return fallback;
@@ -117,120 +134,13 @@ function applyOrientation(u, v) {
   return { u: x + 0.5, v: y + 0.5 };
 }
 
-// Map calibration --------------------------------------------------------------------------
-// An alternative to guessing rotate/flip/scale/pan by hand: click a few spots on the map where
-// you can positively identify a player's real location, and fit a general affine transform
-// (world x,y -> normalized u,v) directly from those correspondences via least squares. This is
-// strictly more capable than the manual sliders above (it also corrects shear/non-uniform
-// scaling, which rotate+scale+pan can't) and, being a property of the map image/data pairing
-// rather than any one replay, only has to be done once per map -- saved per map in localStorage,
-// same as the manual controls, and takes priority over them in toPixel() whenever present.
-let mapCalibration = null;       // { A,B,C,D,E,F, points: [...] } for the current map, or null
-let calibrationPoints = [];      // points collected in the current (possibly not-yet-saved) session
-let calibratePicking = false;    // true while armed, waiting for the next canvas click
-
-function calibrationStorageKey(mapUuid) { return 'vrf-map-calibration:' + mapUuid; }
-
-function loadMapCalibration(mapUuid) {
-  if (!mapUuid) return null;
-  try {
-    const raw = localStorage.getItem(calibrationStorageKey(mapUuid));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (typeof parsed.A !== 'number' || !Array.isArray(parsed.points)) return null;
-    return parsed;
-  } catch { return null; }
-}
-
-function saveMapCalibration(mapUuid, calibration) {
-  if (!mapUuid) return;
-  try { localStorage.setItem(calibrationStorageKey(mapUuid), JSON.stringify(calibration)); }
-  catch { /* private-mode / storage disabled -- calibration just won't be remembered next time */ }
-}
-
-function clearMapCalibrationStorage(mapUuid) {
-  if (!mapUuid) return;
-  try { localStorage.removeItem(calibrationStorageKey(mapUuid)); } catch { /* ignore */ }
-}
-
-function det3(m) {
-  return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
-       - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-       + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-}
-
-/** Solves the 3x3 linear system M*p = b via Cramer's rule. Returns null if M is singular (e.g.
- * every point fed to solveAffine lies on the same line, or all points are the same). */
-function solve3x3(M, b) {
-  const det = det3(M);
-  if (Math.abs(det) < 1e-9) return null;
-  const withCol = (col) => M.map((row, i) => row.map((v, j) => (j === col ? b[i] : v)));
-  return [det3(withCol(0)) / det, det3(withCol(1)) / det, det3(withCol(2)) / det];
-}
-
-/** Least-squares fit of world (x,y) -> normalized (u,v) as an affine transform
- * (u = A*x + B*y + C, v = D*x + E*y + F) from >=3 point correspondences. Returns null if the
- * points are degenerate (collinear, or fewer than 3 distinct locations). */
-function solveAffine(points) {
-  if (points.length < 3) return null;
-
-  // World coordinates (PosX/PosY) are typically several thousand units, and feeding those
-  // straight into the normal-equations matrix below (which involves their squares and a lone "1"
-  // per point for the constant term) makes it extremely poorly conditioned -- entries spanning
-  // many orders of magnitude in the same matrix. That can produce a wildly wrong fit even though
-  // it satisfies the exact points used to compute it (most visible right at the 3-point minimum,
-  // where the fit passes through those points exactly no matter how unstable it is elsewhere).
-  // Centering on the points' own mean and scaling to roughly [-1,1] first keeps the matrix
-  // well-conditioned; the result is converted back to plain world-unit coefficients before
-  // returning, so callers never see the normalized space.
-  const n = points.length;
-  let mx = 0, my = 0;
-  for (const p of points) { mx += p.x; my += p.y; }
-  mx /= n; my /= n;
-
-  let s = 1; // avoid divide-by-zero; a true zero-spread case is already caught as degenerate below
-  for (const p of points) {
-    s = Math.max(s, Math.abs(p.x - mx), Math.abs(p.y - my));
-  }
-
-  let Sxx = 0, Sxy = 0, Sx = 0, Syy = 0, Sy = 0;
-  let Sxu = 0, Syu = 0, Su = 0, Sxv = 0, Syv = 0, Sv = 0;
-  for (const p of points) {
-    const nx = (p.x - mx) / s, ny = (p.y - my) / s;
-    Sxx += nx * nx; Sxy += nx * ny; Sx += nx;
-    Syy += ny * ny; Sy += ny;
-    Sxu += nx * p.u; Syu += ny * p.u; Su += p.u;
-    Sxv += nx * p.v; Syv += ny * p.v; Sv += p.v;
-  }
-  const M = [[Sxx, Sxy, Sx], [Sxy, Syy, Sy], [Sx, Sy, n]];
-  const abc = solve3x3(M, [Sxu, Syu, Su]);
-  const def = solve3x3(M, [Sxv, Syv, Sv]);
-  if (!abc || !def) return null;
-
-  // Undo the centering/scaling: with nx=(x-mx)/s, ny=(y-my)/s,
-  // u = A'*nx + B'*ny + C' = (A'/s)*x + (B'/s)*y + (C' - (A'*mx + B'*ny... )/s), expanded below.
-  const [Ap, Bp, Cp] = abc;
-  const [Dp, Ep, Fp] = def;
-  return {
-    A: Ap / s, B: Bp / s, C: Cp - (Ap * mx + Bp * my) / s,
-    D: Dp / s, E: Ep / s, F: Fp - (Dp * mx + Ep * my) / s,
-  };
-}
-
-/** World units -> screen pixels. Uses the calibrated fit above when one exists for the current
- * map; otherwise falls back to Riot's own formula plus the manual orientation correction. Every
- * drawing function should go through this rather than calling worldToUv directly. */
+/** World units -> screen pixels: Riot's own formula (worldToUv) plus the manual orientation
+ * correction above (rotate/flip/scale/pan, seeded from KNOWN_MAP_ORIENTATIONS when available).
+ * Every drawing function should go through this rather than calling worldToUv directly. */
 function toPixel(x, y, w, h) {
-  let u, v;
-  if (mapCalibration) {
-    u = mapCalibration.A * x + mapCalibration.B * y + mapCalibration.C;
-    v = mapCalibration.D * x + mapCalibration.E * y + mapCalibration.F;
-  } else {
-    const uv = worldToUv(x, y, state.map);
-    const oriented = applyOrientation(uv.u, uv.v);
-    u = oriented.u; v = oriented.v;
-  }
-  return { x: u * w, y: v * h };
+  const uv = worldToUv(x, y, state.map);
+  const oriented = applyOrientation(uv.u, uv.v);
+  return { x: oriented.u * w, y: oriented.v * h };
 }
 
 // ---------------------------------------------------------------------------
@@ -391,209 +301,6 @@ const debugPanel = document.getElementById('debugPanel');
 const debugText = document.getElementById('debugText');
 const btnCopyDebug = document.getElementById('btnCopyDebug');
 const copyDebugStatus = document.getElementById('copyDebugStatus');
-const fitModeStatus = document.getElementById('fitModeStatus');
-
-const calibratePanel = document.getElementById('calibratePanel');
-const calibratePlayerSelect = document.getElementById('calibratePlayerSelect');
-const btnCalibratePick = document.getElementById('btnCalibratePick');
-const calibrateStatus = document.getElementById('calibrateStatus');
-const calibratePointsBody = document.getElementById('calibratePointsBody');
-const btnCalibrateCompute = document.getElementById('btnCalibrateCompute');
-const btnCalibrateClear = document.getElementById('btnCalibrateClear');
-const calibrateResult = document.getElementById('calibrateResult');
-const calibrateImportText = document.getElementById('calibrateImportText');
-const btnCalibrateImport = document.getElementById('btnCalibrateImport');
-const calibrateImportStatus = document.getElementById('calibrateImportStatus');
-
-// ---------------------------------------------------------------------------
-// Map calibration (DOM-dependent part -- state/math live earlier, near toPixel)
-// ---------------------------------------------------------------------------
-
-function updateFitModeStatus() {
-  fitModeStatus.textContent = mapCalibration
-    ? 'Using: calibrated fit (' + mapCalibration.points.length + ' point(s)) -- sliders above are ignored'
-    : 'Using: manual sliders above';
-}
-
-/** Reloads calibration state for whichever map is now current -- call whenever state.map
- * changes (initial resolve, or the map dropdown override). */
-function refreshCalibrationForCurrentMap() {
-  const uuid = state.map && state.map.uuid;
-  mapCalibration = loadMapCalibration(uuid);
-  calibrationPoints = mapCalibration ? mapCalibration.points.slice() : [];
-  renderCalibratePointsTable();
-  updateFitModeStatus();
-}
-
-function buildCalibratePlayerList() {
-  calibratePlayerSelect.innerHTML = '';
-  (state.match.Players || []).forEach((p) => {
-    const opt = document.createElement('option');
-    opt.value = playerKey(p);
-    opt.textContent = p.AgentName || playerKey(p);
-    calibratePlayerSelect.appendChild(opt);
-  });
-}
-
-/** Per-point error against a fit, as % of the map -- the whole point of having more than the
- * bare-minimum 3 points: with exactly 3, the fit passes through all of them exactly (residual
- * ~0) no matter how wrong a mis-clicked point is, so nothing here would ever flag it. With 4+,
- * one bad point among otherwise-good ones stands out as a visibly larger error than the rest. */
-function calibrationResidualPct(fit, p) {
-  const pu = fit.A * p.x + fit.B * p.y + fit.C;
-  const pv = fit.D * p.x + fit.E * p.y + fit.F;
-  return Math.hypot(pu - p.u, pv - p.v) * 100;
-}
-
-function renderCalibratePointsTable() {
-  calibratePointsBody.innerHTML = '';
-  // Only meaningful once there's a saved fit computed from (in general) more points than any one
-  // point can perfectly satisfy -- see calibrationResidualPct's remarks.
-  const fitForResiduals = mapCalibration;
-  calibrationPoints.forEach((p, idx) => {
-    const tr = document.createElement('tr');
-    const cells = [
-      p.player,
-      formatClock(p.timeMs),
-      p.x.toFixed(0),
-      p.y.toFixed(0),
-      (p.u * 100).toFixed(1) + '%, ' + (p.v * 100).toFixed(1) + '%',
-      fitForResiduals ? calibrationResidualPct(fitForResiduals, p).toFixed(1) + '%' : '—',
-    ];
-    for (const text of cells) {
-      const td = document.createElement('td');
-      td.textContent = text;
-      tr.appendChild(td);
-    }
-    const actionTd = document.createElement('td');
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.textContent = '✕';
-    removeBtn.title = 'Remove this point';
-    removeBtn.onclick = () => { calibrationPoints.splice(idx, 1); renderCalibratePointsTable(); };
-    actionTd.appendChild(removeBtn);
-    tr.appendChild(actionTd);
-    calibratePointsBody.appendChild(tr);
-  });
-}
-
-btnCalibratePick.addEventListener('click', () => {
-  if (!calibratePlayerSelect.value) {
-    calibrateStatus.textContent = 'Pick a player first.';
-    return;
-  }
-  calibratePicking = true;
-  btnCalibratePick.classList.add('armed');
-  btnCalibratePick.textContent = 'Click the map now...';
-  canvas.classList.add('calibrating');
-  calibrateStatus.textContent = 'Click the exact spot on the map where that player really is right now.';
-});
-
-canvas.addEventListener('click', (e) => {
-  if (!calibratePicking) return;
-  calibratePicking = false;
-  btnCalibratePick.classList.remove('armed');
-  btnCalibratePick.textContent = 'Pick location on map';
-  canvas.classList.remove('calibrating');
-
-  const key = calibratePlayerSelect.value;
-  const track = state.tracks.find((t) => playerKey(t.Player) === key);
-  const sample = track && interpolateSample(track.Samples, state.currentTimeMs);
-  if (!sample) {
-    calibrateStatus.textContent = "Couldn't find that player's position at the current time -- try again.";
-    return;
-  }
-
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
-  const px = (e.clientX - rect.left) * scaleX;
-  const py = (e.clientY - rect.top) * scaleY;
-
-  calibrationPoints.push({
-    player: calibratePlayerSelect.options[calibratePlayerSelect.selectedIndex].textContent,
-    timeMs: state.currentTimeMs,
-    x: sample.PosX,
-    y: sample.PosY,
-    u: px / canvas.width,
-    v: py / canvas.height,
-  });
-  renderCalibratePointsTable();
-  calibrateStatus.textContent = calibrationPoints.length + ' point(s) recorded so far.';
-});
-
-btnCalibrateCompute.addEventListener('click', () => {
-  // 3 points exactly determine an affine transform, which means the fit passes through all 3
-  // perfectly no matter what -- there's no redundancy to catch one bad/mis-clicked point, and the
-  // resulting fit can be wildly wrong anywhere else on the map despite reporting "0% error". 4+
-  // points make the system over-determined, so a bad point actually shows up as a worse residual
-  // than the others instead of hiding perfectly.
-  if (calibrationPoints.length < 4) {
-    calibrateResult.textContent = 'Need at least 4 points to compute a fit that can catch a bad ' +
-      'click -- with only 3, the fit passes through them exactly even if one is wrong, and you\'d ' +
-      'have no way to tell. Add at least one more (6 or more is even better) and try again.';
-    return;
-  }
-  const fit = solveAffine(calibrationPoints);
-  if (!fit) {
-    calibrateResult.textContent = "Those points are too close together or in a line to solve -- pick points spread across different, well-separated areas of the map.";
-    return;
-  }
-
-  const residuals = calibrationPoints.map((p) => calibrationResidualPct(fit, p));
-  const worstErrorPct = Math.max(...residuals);
-  const avgErrorPct = residuals.reduce((a, b) => a + b, 0) / residuals.length;
-
-  mapCalibration = Object.assign({}, fit, { points: calibrationPoints.slice() });
-  saveMapCalibration(state.map && state.map.uuid, mapCalibration);
-  updateFitModeStatus();
-  renderCalibratePointsTable();
-
-  let message = 'Saved -- average error ' + avgErrorPct.toFixed(1) + '% of the map, worst point ' +
-    worstErrorPct.toFixed(1) + '% (see the Error column in the table above).';
-  if (worstErrorPct > avgErrorPct * 2.5 && worstErrorPct > 3) {
-    message += ' One point stands out as much worse than the rest -- that\'s usually a mis-click ' +
-      'or wrong player/moment on that one specific point. Remove it (✕) and add a fresh one, then compute again.';
-  } else if (worstErrorPct > 5) {
-    message += ' That looks high across the board -- try re-picking a couple of points more precisely, or add more spread-out ones.';
-  }
-  calibrateResult.textContent = message;
-});
-
-btnCalibrateClear.addEventListener('click', () => {
-  mapCalibration = null;
-  calibrationPoints = [];
-  clearMapCalibrationStorage(state.map && state.map.uuid);
-  renderCalibratePointsTable();
-  updateFitModeStatus();
-  calibrateResult.textContent = 'Calibration cleared -- back to the manual sliders above.';
-});
-
-btnCalibrateImport.addEventListener('click', () => {
-  let parsed;
-  try {
-    parsed = JSON.parse(calibrateImportText.value);
-  } catch (err) {
-    calibrateImportStatus.textContent = "Couldn't parse that as JSON: " + err.message;
-    return;
-  }
-  if (!Array.isArray(parsed)) {
-    calibrateImportStatus.textContent = 'Expected a JSON array of points.';
-    return;
-  }
-  const required = ['player', 'timeMs', 'x', 'y', 'u', 'v'];
-  const bad = parsed.find((p) => !p || typeof p !== 'object' ||
-    required.some((k) => typeof p[k] !== 'number' && k !== 'player') ||
-    typeof p.player !== 'string');
-  if (bad) {
-    calibrateImportStatus.textContent = 'Every point needs player (text), timeMs, x, y, u, v (numbers). Found one that doesn\'t match.';
-    return;
-  }
-  calibrationPoints.push(...parsed);
-  renderCalibratePointsTable();
-  calibrateImportStatus.textContent = 'Added ' + parsed.length + ' point(s) -- ' +
-    calibrationPoints.length + ' total. Click "Compute & save fit" above to use them.';
-  calibrateImportText.value = '';
-});
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -655,11 +362,7 @@ function initializeFromLoadedData() {
   resolveMap();
   buildRoster();
   buildChapters();
-  buildCalibratePlayerList();
   logSpawnDebugInfo();
-  calibratePanel.hidden = false;
-  calibrateStatus.textContent = '';
-  calibrateResult.textContent = '';
 
   visionToggle.disabled = !state.visionCones;
   visionToggle.checked = false;
@@ -754,7 +457,6 @@ function applyLoadedOrientation() {
   mapScaleValue.textContent = loaded.scale.toFixed(2);
   mapOffsetXValue.textContent = Math.round(loaded.offsetX * 100) + '%';
   mapOffsetYValue.textContent = Math.round(loaded.offsetY * 100) + '%';
-  refreshCalibrationForCurrentMap();
 }
 
 // Sliders update mapOrientation and the on-screen readout live on every drag tick ('input', fires
@@ -792,10 +494,10 @@ mapOffsetYInput.addEventListener('input', () => {
 });
 mapOffsetYInput.addEventListener('change', persistOrientationChange);
 btnResetOrientation.addEventListener('click', () => {
-  const fresh = defaultOrientation();
+  const fresh = defaultOrientation(state.map && state.map.uuid);
   Object.assign(mapOrientation, fresh);
-  mapRotateSelect.value = '0';
-  mapFlipCheckbox.checked = false;
+  mapRotateSelect.value = String(fresh.rotate);
+  mapFlipCheckbox.checked = fresh.flipH;
   mapScaleInput.value = '1';
   mapOffsetXInput.value = '0';
   mapOffsetYInput.value = '0';
@@ -874,10 +576,8 @@ function logSpawnDebugInfo() {
   lines.push('xMultiplier=' + state.map.xMultiplier + '  yMultiplier=' + state.map.yMultiplier +
     '  xScalarToAdd=' + state.map.xScalarToAdd + '  yScalarToAdd=' + state.map.yScalarToAdd);
   lines.push('Map orientation control: rotate=' + mapOrientation.rotate + '  flipH=' + mapOrientation.flipH +
-    '  scale=' + mapOrientation.scale + '  offsetX=' + mapOrientation.offsetX + '  offsetY=' + mapOrientation.offsetY);
-  lines.push(mapCalibration
-    ? 'Calibrated fit ACTIVE (' + mapCalibration.points.length + ' point(s)) -- the orientation control above is being ignored.'
-    : 'No calibrated fit saved for this map -- using the orientation control above.');
+    '  scale=' + mapOrientation.scale + '  offsetX=' + mapOrientation.offsetX + '  offsetY=' + mapOrientation.offsetY +
+    (KNOWN_MAP_ORIENTATIONS[state.map.uuid] ? '  (built-in default for this map)' : ''));
   lines.push('');
   lines.push('Spawn-frame positions (u/v should be within 0..1 to land on the map image):');
   lines.push(['player', 'PosX', 'PosY', 'u', 'v', 'insideImage'].join('\t'));

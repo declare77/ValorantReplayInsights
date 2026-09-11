@@ -166,53 +166,52 @@ piece of this viewer's math (screen rotation direction for a given yaw) that has
 against a real recording, and it's deliberately a live control instead of a silent guess.
 
 If everything is on the wrong side of the map — e.g. the two teams show up on the left/right when
-the map actually has spawns on the top/bottom — that's the minimap coordinate transform (also
-never pixel-checked against a real recording, see the table above) disagreeing with how that map's
-downloaded art happens to be oriented, not the underlying position data being wrong. Use the
+the map actually has spawns on the top/bottom — that's the minimap coordinate transform disagreeing
+with how that map's downloaded art happens to be oriented, not the underlying position data being
+wrong. A handful of maps have a **known-good rotation built in** (see the table below) — those
+apply automatically the first time you load that map, no setup needed. For anything else, use the
 **Map orientation** control (rotate 0/90/180/270°, plus a flip checkbox) next to the facing offset
-to correct it by eye — try each rotation until the two teams land on the correct sides. It's
-per-map and remembered in your browser (`localStorage`) once set, so you only need to set it once
-per map, ever.
+to correct it by eye — try each rotation until the two teams land on the correct sides. It's per-map
+and remembered in your browser (`localStorage`) once set, so you only need to set it once per map,
+ever, and a **Reset map fit** button puts it back to that map's built-in default (or 0°/no flip if
+it doesn't have one) if you want to start over.
 
-If positions are pointed in the right general direction but still look off-center — clipping into
-walls that aren't near the real spawn, or drifting away from the correct rooms as the round goes
-on — that's a different problem from orientation: the rotate/flip controls assume the downloaded
-map image's content fills the exact same square Riot's coordinate formula was calibrated against,
-and that's not guaranteed (valorant-api.com's `displayIcon` is a separate asset, not necessarily
-pixel-identical to whatever the game client itself renders internally). The **Scale** and **Pan
-X%/Y%** controls next to Map orientation compensate for that — Scale zooms in/out around the image
-center, the two Pan fields shift it — also remembered per map, with a **Reset** button to get back
-to defaults (0° rotation, no flip, scale 1, no pan) if you want to start over.
+**Maps with a confirmed rotation built in** (`KNOWN_MAP_ORIENTATIONS` in `viewer/app.js`):
 
-**Or skip the sliders entirely and calibrate it once.** Rotate/flip/scale/pan means trial and
-error, and you'd have to redo it if it's ever slightly off. The **Calibrate map fit** panel (below
-the roster, next to Debug info) does it properly instead: pause on a moment where you know exactly
-where a player is standing, pick that player, click **Pick location**, then click that exact spot
-on the map. Do that for **at least 4 points** spread across different areas of the map (not
-clustered together — 6 or more is even better), then click **Compute & save fit**. It works out the
-correct transform from those correspondences by least squares and shows each point's own error (as
-% of the map) right in the table, plus the average and worst overall, so a bad click stands out
-instead of hiding.
+| Map | Rotation | Confirmed by |
+|---|---|---|
+| Sunset | 90°, flipped | Matched against a player's own room-by-room read of a live match, then separately checked against 8 of 10 real player positions taken from an in-game screenshot (see below) |
 
-4 is a hard minimum, not just a suggestion: 3 points exactly determine an affine transform, so the
-fit passes through all 3 perfectly no matter what — including if one of them was a mis-click or the
-wrong player/moment — and would report a perfect-looking "0% error" while still being badly wrong
-everywhere else on the map (this is exactly what happened the first time this feature shipped: 3
-points, one slightly off, and most players ended up scattered off the map entirely on a replay far
-from those 3 points). With 4 or more, a bad point actually shows up as a visibly larger error than
-the rest, so you know which one to remove (✕) and redo.
+If you work out a good rotation for another map, add it to that same table in `app.js` (one line)
+so nobody has to rediscover it — see "How to verify a map's rotation" below.
 
-This is a property of the map (its image and Riot's coordinate data for it), not of any one replay,
-so once it's saved for a map it's automatically used for every future replay on that same map too —
-the manual sliders are ignored whenever a calibrated fit exists, and a **Clear calibration** button
-reverts to them if you ever want to start over.
+If positions are pointed in the right general direction but still look a little off-center —
+clipping into walls that aren't near the real spawn, or drifting slightly away from the correct
+rooms — that's a smaller, separate problem: the downloaded map image's content might not fill the
+exact same square Riot's coordinate formula was calibrated against (valorant-api.com's
+`displayIcon` is a separate asset, not necessarily pixel-identical to whatever the game client
+renders internally). The **Scale** and **Pan X%/Y%** controls next to Map orientation compensate
+for that — Scale zooms in/out around the image center, the two Pan fields shift it — also
+remembered per map. In practice this tends to be a small correction (a few percent), not the main
+source of misalignment — get rotation right first.
 
-If someone worked out calibration points for you some other way (e.g. from a screenshot with known
-player positions, matched up against a replay's `movement.json`), you don't have to re-click them
-one by one: open **Or paste in points someone worked out for you** under the calibrate panel, paste
-in a JSON array of `{player, timeMs, x, y, u, v}` objects, click **Add these points to the table**,
-then **Compute & save fit** as usual. It's just a shortcut into the same table the manual clicks
-fill in — same residual checks, same 4-point minimum, nothing skipped.
+**How to verify a map's rotation**, if you want more confidence than "the two teams are on the
+right side": take a screenshot of the in-game minimap at a moment where you can positively identify
+several players (ideally ones standing still or moving slowly — a sprinting player's position
+shifts fast enough that being even half a second off between your screenshot and the replay
+viewer's scrubber shows up as a real difference), then eyeball their positions in the viewer at that
+same moment against your screenshot. If most of them land in the right rooms, the rotation is good
+enough — don't chase exact pixel matches for every player, particularly ones who were moving fast
+at that instant.
+
+There used to be a "click points on the map, fit a custom transform" calibration feature here for
+squeezing out more precision than plain rotation. It's been removed: fitting a transform from
+hand-picked points turned out to be fragile in practice (one slightly-off or fast-moving point could
+visibly distort the whole fit, in a way that was hard to diagnose after the fact), and it wasn't
+buying meaningfully better accuracy than just getting the rotation right and living with the small
+per-map centering error the Scale/Pan sliders address. If a map's built-in rotation (or one you set
+by eye) isn't good enough for what you're doing, that's a sign the downloaded map image itself may
+be the wrong one — worth re-running `Fetch-Assets.ps1 -Force` before trying to compensate further.
 
 If you're not sure the transform itself is right (positions clipping into walls, or way off the
 map entirely), open the **Debug info** panel below the roster after loading a match — it lists
