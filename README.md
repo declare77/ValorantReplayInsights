@@ -234,13 +234,29 @@ against a real recording, and it's deliberately a live control instead of a sile
 If everything is on the wrong side of the map — e.g. the two teams show up on the left/right when
 the map actually has spawns on the top/bottom — that's the minimap coordinate transform disagreeing
 with how that map's downloaded art happens to be oriented, not the underlying position data being
-wrong. A handful of maps have a **known-good rotation built in** (see the table below) — those
-apply automatically the first time you load that map, no setup needed. For anything else, use the
-**Map orientation** control (rotate 0/90/180/270°, plus a flip checkbox) next to the facing offset
-to correct it by eye — try each rotation until the two teams land on the correct sides. It's per-map
-and remembered in your browser (`localStorage`) once set, so you only need to set it once per map,
-ever, and a **Reset map fit** button puts it back to that map's built-in default (or 0°/no flip if
-it doesn't have one) if you want to start over.
+wrong. Three ways this gets fixed, in the order the viewer itself tries them:
+
+1. **Automatic calibration, no screenshot or in-game access needed.** The first time you load a
+   map that isn't already covered by #2 below, the viewer tries all 4 rotations × flip/no-flip
+   itself: every downloaded competitive-map image has its four corners fully transparent (only the
+   actual playable shape is opaque), so a real recorded position can only ever be correct sitting
+   on an opaque pixel — never one of those corners. It transforms every player's every recorded
+   position by each of the 8 possibilities and picks whichever one lands almost all of them on
+   opaque pixels, *only* when one candidate clearly, confidently wins (see `AUTO_ORIENTATION_MIN_SCORE`/
+   `_MIN_LEAD` in `viewer/app.js` for the exact bar) — otherwise it leaves the manual controls alone
+   rather than force a low-confidence guess. This runs automatically; there's nothing to click. The
+   **Debug info** panel's "Automatic orientation calibration" line always says what happened —
+   applied (with the winning and runner-up scores), inconclusive (and why), or not run (already
+   covered by #2, or already has a saved value) — so it's never a silent black box.
+2. A handful of maps additionally have a **known-good rotation hand-confirmed and built in** (see
+   the table below), from back before automatic calibration existed — those take priority over #1
+   and are never recomputed.
+3. For anything #1 couldn't confidently resolve, or if you just want to override it, use the **Map
+   orientation** control (rotate 0/90/180/270°, plus a flip checkbox) next to the facing offset to
+   correct it by eye. It's per-map and remembered in your browser (`localStorage`) once set — by you
+   *or* by #1 — so it only ever needs setting once per map, and a **Reset map fit** button puts it
+   back to whatever #1 or #2 computed (or 0°/no flip if neither found anything) if you want to start
+   over.
 
 **Maps with a confirmed rotation built in** (`KNOWN_MAP_ORIENTATIONS` in `viewer/app.js`) — this
 one moves where each dot lands, without touching the downloaded picture itself:
@@ -255,11 +271,12 @@ just sideways/upside-down, rather than the coordinate formula disagreeing with a
 picture; this one physically turns the drawn image and leaves dot positions using the plain,
 uncorrected formula:
 
-*(none confirmed yet — Ascent was tried here at 90°, and separately in the table above at 90°,
-both based on a visual impression rather than a real reference point; both reportedly made
-alignment worse, so neither is kept. Use the Debug info panel's per-player u/v numbers against an
-actual known position to work out the real fix — see "How to verify a map's rotation" below — before
-adding an entry.)*
+*(none confirmed yet. Ascent was tried here twice — once as a dot-position rotation, once as an
+image rotation — both a guess from a visual impression rather than a real reference point, and both
+reportedly made alignment worse, so neither is kept. Ascent (and any other map without a manual
+entry in either table) now goes through automatic calibration (#1 above) instead, which needs no
+screenshot or guess at all — check the Debug info panel's "Automatic orientation calibration" line
+after loading it.)*
 
 If you work out a good rotation for another map, add it to whichever of the two tables in `app.js`
 actually fixed it (one line) so nobody has to rediscover it — see "How to verify a map's rotation"

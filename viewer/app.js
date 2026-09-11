@@ -153,7 +153,13 @@ const KNOWN_MAP_ORIENTATIONS = {
 
 function defaultOrientation(mapUuid) {
   const known = mapUuid && KNOWN_MAP_ORIENTATIONS[mapUuid];
-  return { rotate: known ? known.rotate : 0, flipH: known ? known.flipH : false, scale: 1, offsetX: 0, offsetY: 0 };
+  if (known) return { rotate: known.rotate, flipH: known.flipH, scale: 1, offsetX: 0, offsetY: 0 };
+  // Falls back to whatever this session's own automatic calibration (below) worked out, if
+  // anything -- so "Reset map fit" and a fresh page load both land on the computed value instead
+  // of blank 0/no-flip once one's been found.
+  const auto = mapUuid && autoDetectedOrientations[mapUuid];
+  if (auto && !auto.error) return { rotate: auto.rotate, flipH: auto.flipH, scale: 1, offsetX: 0, offsetY: 0 };
+  return { rotate: 0, flipH: false, scale: 1, offsetX: 0, offsetY: 0 };
 }
 
 // A *different* correction from KNOWN_MAP_ORIENTATIONS above. That table nudges where each
@@ -190,6 +196,211 @@ function drawMapImage(w, h) {
   ctx.rotate(rotateDeg * Math.PI / 180); // canvas rotate() is clockwise for a positive angle
   ctx.drawImage(state.mapImage, -w / 2, -h / 2, w, h);
   ctx.restore();
+}
+
+// Automatic per-map orientation calibration ------------------------------------------------
+// The manual Map orientation control above works, but needs a person to eyeball a real screenshot
+// or a known callout to tell which of 8 possibilities (4 rotations x flip/no-flip) is right --
+// not always available (e.g. a recording player who no longer has access to that match in-game).
+// This derives the same (rotate, flipH) pair with no external reference at all, from two things
+// this project already has for every replay:
+//
+//  1. Every downloaded competitive-map image (valorant-api.com's `displayIcon`) is a square PNG
+//     with the actual playable map inset and its four corners left fully transparent. A real
+//     recorded position can only ever be somewhere on the actual map -- so it can only ever be
+//     correct to draw it over an OPAQUE pixel of that image, never one of the transparent corners.
+//  2. Riot's own coordinate formula (worldToUv) already places the WHOLE match's real footprint
+//     somewhere inside the [0,1] square, regardless of image orientation -- what differs per
+//     candidate rotate/flip is only where inside that square each point ends up.
+//
+// So: for each of the 8 possible (rotate, flipH) pairs, transform every recorded movement sample
+// (already loaded -- no extra data or user input needed) and measure what fraction land on an
+// opaque pixel of the downloaded image rather than a transparent corner. A real map's shape is far
+// from rotationally symmetric, so in practice one candidate clearly wins; this only auto-applies a
+// result when it clears real confidence thresholds (below), and otherwise leaves the manual
+// controls exactly as they were -- never forcing a low-confidence guess, which is exactly what
+// went wrong with the two prior hand-picked attempts at Ascent.
+const AUTO_ORIENTATION_CANDIDATES = [
+  { rotate: 0, flipH: false }, { rotate: 90, flipH: false }, { rotate: 180, flipH: false }, { rotate: 270, flipH: false },
+  { rotate: 0, flipH: true }, { rotate: 90, flipH: true }, { rotate: 180, flipH: true }, { rotate: 270, flipH: true },
+];
+const AUTO_ORIENTATION_MIN_SCORE = 0.75; // winning candidate must land at least this often
+const AUTO_ORIENTATION_MIN_LEAD = 0.12; // ...and beat the runner-up by at least this much
+const AUTO_ORIENTATION_MIN_VOID_FRACTION = 0.02; // image must have at least this much real transparency to calibrate against at all
+
+// mapUuid -> { rotate, flipH, score, scores } on success, or { error, scores? } when inconclusive.
+// Session-only (not persisted itself -- a successful result gets persisted like any manual choice
+// via saveMapOrientation, see maybeAutoDetectOrientation below); this cache just avoids recomputing
+// on every re-render and lets the Debug info panel report exactly what happened.
+let autoDetectedOrientations = {};
+
+function rotateFlipAroundCenter(u, v, rotate, flipH) {
+  let x = u - 0.5, y = v - 0.5;
+  if (flipH) x = -x;
+  switch (((rotate % 360) + 360) % 360) {
+    case 90: { const nx = -y, ny = x; x = nx; y = ny; break; }
+    case 180: { x = -x; y = -y; break; }
+    case 270: { const nx = y, ny = -x; x = nx; y = ny; break; }
+    default: break;
+  }
+  return { u: x + 0.5, v: y + 0.5 };
+}
+
+/** Reads `image`'s own alpha channel into a small lookup grid, drawn onto a fresh *transparent*
+ * offscreen canvas (never the black-background stage canvas) so a genuinely transparent source
+ * pixel reads back as alpha 0 rather than blended with black. 256px is plenty for a coarse
+ * inside/outside-the-map read and keeps thousands of per-candidate lookups cheap. Can throw (some
+ * browsers refuse to read canvas pixels back for a file:// page) -- every caller wraps this in
+ * try/catch and treats a throw as "auto-detection unavailable" rather than a hard failure. */
+function buildAlphaSampler(image) {
+  if (!image || !image.naturalWidth || !image.naturalHeight) return null;
+  const SIZE = 256;
+  const off = document.createElement('canvas');
+  off.width = SIZE;
+  off.height = SIZE;
+  const offCtx = off.getContext('2d', { willReadFrequently: true });
+  offCtx.clearRect(0, 0, SIZE, SIZE);
+  offCtx.drawImage(image, 0, 0, SIZE, SIZE);
+  const { data } = offCtx.getImageData(0, 0, SIZE, SIZE); // throws if the canvas is tainted
+  return {
+    alphaAt(u, v) {
+      if (u < 0 || u > 1 || v < 0 || v > 1) return 0; // off the square entirely -- never on-map
+      const px = Math.min(SIZE - 1, Math.max(0, Math.floor(u * SIZE)));
+      const py = Math.min(SIZE - 1, Math.max(0, Math.floor(v * SIZE)));
+      return data[(py * SIZE + px) * 4 + 3];
+    },
+  };
+}
+
+/** Coarse fraction of the WHOLE image (a fixed 32x32 grid, independent of any candidate rotation)
+ * that's transparent -- used to tell "this image has no real void margin to calibrate against"
+ * apart from "none of the 8 candidates happen to fit", which need different explanations. */
+function wholeImageTransparentFraction(sampler) {
+  const N = 32;
+  let transparent = 0;
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      if (sampler.alphaAt((i + 0.5) / N, (j + 0.5) / N) <= 40) transparent++;
+    }
+  }
+  return transparent / (N * N);
+}
+
+/** Every recorded world position worth checking -- every player's every movement sample across
+ * the whole match. movement.json is already thinned to at most 10 samples/sec/player (see the
+ * README); this additionally strides down to a few thousand points, which is plenty to confidently
+ * separate 8 candidates without doing tens of thousands of image lookups per candidate. */
+function collectCalibrationPoints(tracks) {
+  const all = [];
+  for (const track of tracks) {
+    for (const s of track.Samples || []) {
+      if (s.PosX != null && s.PosY != null) all.push(s);
+    }
+  }
+  const CAP = 4000;
+  if (all.length <= CAP) return all;
+  const stride = Math.ceil(all.length / CAP);
+  const strided = [];
+  for (let i = 0; i < all.length; i += stride) strided.push(all[i]);
+  return strided;
+}
+
+/** Tries every (rotate, flipH) pair and returns the one whose transformed points most consistently
+ * land on opaque image pixels -- or `{ error }` if the image has no usable transparent margin, or
+ * no candidate clears the confidence bar (AUTO_ORIENTATION_MIN_SCORE/_LEAD), in which case the
+ * caller leaves the manual controls exactly as they were rather than force a guess. */
+function autoDetectOrientation(map, image, tracks) {
+  let sampler;
+  try {
+    sampler = buildAlphaSampler(image);
+  } catch {
+    return { error: "this browser won't allow reading the map image's pixels back (a canvas security restriction) -- manual controls still work" };
+  }
+  if (!sampler) return { error: 'map image not ready yet' };
+
+  const voidFraction = wholeImageTransparentFraction(sampler);
+  if (voidFraction < AUTO_ORIENTATION_MIN_VOID_FRACTION) {
+    return { error: 'this map image has only ' + (voidFraction * 100).toFixed(1) + '% transparent area -- not enough of a void margin to calibrate rotation against for this map' };
+  }
+
+  const points = collectCalibrationPoints(tracks);
+  if (points.length < 20) {
+    return { error: 'not enough recorded positions in this replay to calibrate from (' + points.length + ')' };
+  }
+
+  const scores = AUTO_ORIENTATION_CANDIDATES.map((candidate) => {
+    let onMap = 0;
+    for (const s of points) {
+      const uv = worldToUv(s.PosX, s.PosY, map);
+      const oriented = rotateFlipAroundCenter(uv.u, uv.v, candidate.rotate, candidate.flipH);
+      if (sampler.alphaAt(oriented.u, oriented.v) > 40) onMap++;
+    }
+    return { candidate, score: onMap / points.length };
+  });
+  scores.sort((a, b) => b.score - a.score);
+
+  const best = scores[0], runnerUp = scores[1];
+  if (best.score < AUTO_ORIENTATION_MIN_SCORE || best.score - runnerUp.score < AUTO_ORIENTATION_MIN_LEAD) {
+    return {
+      error: 'no single orientation clearly wins (best ' + (best.score * 100).toFixed(0) + '%, runner-up ' +
+        (runnerUp.score * 100).toFixed(0) + '%) -- not confident enough to auto-apply',
+      scores,
+    };
+  }
+
+  return { rotate: best.candidate.rotate, flipH: best.candidate.flipH, score: best.score, scores };
+}
+
+/** Runs auto-detection at most once per map per browser session, and only when there's nothing
+ * more authoritative to respect already: a hand-confirmed KNOWN_MAP_ORIENTATIONS entry, or a value
+ * already saved for this map (a person's own manual choice, or an earlier auto-detected one from a
+ * previous load) -- this never overwrites either. On success, applies the result exactly like a
+ * manual choice (updates the live controls, persists it via saveMapOrientation) so it behaves
+ * identically to one from here on, including surviving "Reset map fit" and future reloads. */
+function maybeAutoDetectOrientation() {
+  const uuid = state.map && state.map.uuid;
+  if (!uuid || !state.mapImage) return;
+  if (KNOWN_MAP_ORIENTATIONS[uuid]) return;
+  if (autoDetectedOrientations[uuid]) return;
+  try {
+    if (localStorage.getItem(orientationStorageKey(uuid))) return;
+  } catch { /* private mode / storage disabled -- fall through and just recompute each load */ }
+
+  const result = autoDetectOrientation(state.map, state.mapImage, state.tracks);
+  autoDetectedOrientations[uuid] = result;
+  if (!result.error) {
+    // Guards against the extremely unlikely race of a person manually setting rotate/flip while
+    // this async image load was still in flight -- don't clobber a choice they just made.
+    if (mapOrientation.rotate === 0 && !mapOrientation.flipH) {
+      mapOrientation.rotate = result.rotate;
+      mapOrientation.flipH = result.flipH;
+      mapRotateSelect.value = String(result.rotate);
+      mapFlipCheckbox.checked = result.flipH;
+      saveMapOrientation(uuid);
+    }
+  }
+  // Refresh the (already-generated, possibly now-stale) debug text so whoever opens that panel
+  // sees this result without needing to nudge a slider first -- doesn't force the panel open,
+  // `hidden` here only controls whether its collapsed <summary> is available to click at all,
+  // already true by this point in the load sequence.
+  if (state.tracks.length > 0) logSpawnDebugInfo();
+}
+
+function describeAutoDetection(uuid) {
+  if (KNOWN_MAP_ORIENTATIONS[uuid]) return 'not run -- this map already has a hand-confirmed rotation built in';
+  let saved = null;
+  try { saved = localStorage.getItem(orientationStorageKey(uuid)); } catch { /* ignore */ }
+  const result = autoDetectedOrientations[uuid];
+  const fmtScores = (scores) => scores.map((s) =>
+    (s.candidate.rotate + (s.candidate.flipH ? '+flip' : '') + '=' + (s.score * 100).toFixed(0) + '%')).join(', ');
+  if (!result) {
+    return saved ? 'not run -- this map already has a saved orientation in this browser' : 'not run yet';
+  }
+  if (result.error) {
+    return 'ran, inconclusive -- ' + result.error + (result.scores ? '  [' + fmtScores(result.scores) + ']' : '');
+  }
+  return 'applied -- rotate=' + result.rotate + ' flipH=' + result.flipH + ' (' + (result.score * 100).toFixed(0) +
+    '% of recorded positions landed on the map image)  [' + fmtScores(result.scores) + ']';
 }
 
 function loadMapOrientation(mapUuid) {
@@ -814,7 +1025,7 @@ function loadMapImage() {
   }
 
   const img = new Image();
-  img.onload = () => { state.mapImage = img; hideMapOverlay(); };
+  img.onload = () => { state.mapImage = img; hideMapOverlay(); maybeAutoDetectOrientation(); };
   img.onerror = () => { state.mapImage = null; showMapOverlay('That map image failed to load.'); };
   img.src = '../assets/' + entry.image;
 }
@@ -875,6 +1086,7 @@ function logSpawnDebugInfo() {
     (KNOWN_MAP_ORIENTATIONS[state.map.uuid] ? '  (built-in default for this map)' : ''));
   lines.push('Map image rotation (separate from the above -- turns the picture itself, not the dots): ' +
     ((state.map && MAP_IMAGE_ROTATIONS[state.map.uuid]) || 0) + '°');
+  lines.push('Automatic orientation calibration: ' + describeAutoDetection(state.map.uuid));
   const hasSides = (state.match.Sides || []).length > 0;
   lines.push('Team sides: ' + (hasSides
     ? 'resolved (' + state.match.Sides.length + ' round(s) -- spike-carrier + spawn-cluster method, see README)'
