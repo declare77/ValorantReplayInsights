@@ -83,8 +83,9 @@
       <input type="checkbox" id="visionToggle" disabled> Vision cones (approximate)
     </label>
     <label class="check" title="Nudge this if facing arrows look rotated/mirrored on a particular map">
-      Facing offset°
-      <input type="number" id="facingOffset" value="0" step="15" style="width:4.5em">
+      Facing offset
+      <input type="range" id="facingOffset" value="0" min="-180" max="180" step="5">
+      <span class="sliderValue" id="facingOffsetValue">0°</span>
     </label>
     <label class="check" title="Fixes everything appearing on the wrong side of the map (e.g. teams on the left/right when they should be top/bottom) -- some minimap art isn't oriented exactly how the position formula assumes. Remembered per map.">
       Map orientation
@@ -96,15 +97,22 @@
       </select>
       <input type="checkbox" id="mapFlip"> Flip
     </label>
-    <label class="check" title="Fixes positions landing off-center once the orientation above is otherwise correct -- the downloaded map image's crop/margins may not exactly match what the position formula assumes. Scale zooms around the image center; the offsets pan it. Remembered per map.">
+    <label class="check" title="Fixes positions landing off-center once the orientation above is otherwise correct -- the downloaded map image's crop/margins may not exactly match what the position formula assumes. Zooms around the image center. Remembered per map.">
       Scale
-      <input type="number" id="mapScale" value="1" step="0.02" min="0.1" style="width:4.5em">
-      Pan X%
-      <input type="number" id="mapOffsetX" value="0" step="1" style="width:4em">
-      Pan Y%
-      <input type="number" id="mapOffsetY" value="0" step="1" style="width:4em">
-      <button id="btnResetOrientation" type="button" title="Reset orientation/scale/pan for this map back to defaults">Reset</button>
+      <input type="range" id="mapScale" value="1" min="0.3" max="3" step="0.01">
+      <span class="sliderValue" id="mapScaleValue">1.00</span>
     </label>
+    <label class="check" title="Pans the map left/right relative to the position data, after scale/orientation. Remembered per map.">
+      Pan X
+      <input type="range" id="mapOffsetX" value="0" min="-50" max="50" step="1">
+      <span class="sliderValue" id="mapOffsetXValue">0%</span>
+    </label>
+    <label class="check" title="Pans the map up/down relative to the position data, after scale/orientation. Remembered per map.">
+      Pan Y
+      <input type="range" id="mapOffsetY" value="0" min="-50" max="50" step="1">
+      <span class="sliderValue" id="mapOffsetYValue">0%</span>
+    </label>
+    <button id="btnResetOrientation" type="button" title="Reset orientation/scale/pan for this map back to defaults">Reset map fit</button>
   </div>
 </footer>
 

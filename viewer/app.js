@@ -270,6 +270,10 @@ const timeLabel = document.getElementById('timeLabel');
 const roundLabel = document.getElementById('roundLabel');
 const visionToggle = document.getElementById('visionToggle');
 const facingOffsetInput = document.getElementById('facingOffset');
+const facingOffsetValue = document.getElementById('facingOffsetValue');
+const mapScaleValue = document.getElementById('mapScaleValue');
+const mapOffsetXValue = document.getElementById('mapOffsetXValue');
+const mapOffsetYValue = document.getElementById('mapOffsetYValue');
 const mapRotateSelect = document.getElementById('mapRotate');
 const mapFlipCheckbox = document.getElementById('mapFlip');
 const mapScaleInput = document.getElementById('mapScale');
@@ -433,33 +437,45 @@ function applyLoadedOrientation() {
   mapScaleInput.value = String(loaded.scale);
   mapOffsetXInput.value = String(Math.round(loaded.offsetX * 100));
   mapOffsetYInput.value = String(Math.round(loaded.offsetY * 100));
+  mapScaleValue.textContent = loaded.scale.toFixed(2);
+  mapOffsetXValue.textContent = Math.round(loaded.offsetX * 100) + '%';
+  mapOffsetYValue.textContent = Math.round(loaded.offsetY * 100) + '%';
 }
 
-function onOrientationControlChanged() {
+// Sliders update mapOrientation and the on-screen readout live on every drag tick ('input', fires
+// continuously) so the map redraws in real time as you adjust -- but only persist to localStorage
+// and refresh the (relatively expensive) debug panel text on 'change' (fires once, on release),
+// so dragging doesn't spam either of those.
+function persistOrientationChange() {
   saveMapOrientation(state.map && state.map.uuid);
   if (state.tracks.length > 0) logSpawnDebugInfo();
 }
 
 mapRotateSelect.addEventListener('change', () => {
   mapOrientation.rotate = Number(mapRotateSelect.value) || 0;
-  onOrientationControlChanged();
+  persistOrientationChange();
 });
 mapFlipCheckbox.addEventListener('change', () => {
   mapOrientation.flipH = mapFlipCheckbox.checked;
-  onOrientationControlChanged();
+  persistOrientationChange();
 });
-mapScaleInput.addEventListener('change', () => {
+mapScaleInput.addEventListener('input', () => {
   mapOrientation.scale = Number(mapScaleInput.value) || 1;
-  onOrientationControlChanged();
+  mapScaleValue.textContent = mapOrientation.scale.toFixed(2);
 });
-mapOffsetXInput.addEventListener('change', () => {
-  mapOrientation.offsetX = (Number(mapOffsetXInput.value) || 0) / 100;
-  onOrientationControlChanged();
+mapScaleInput.addEventListener('change', persistOrientationChange);
+mapOffsetXInput.addEventListener('input', () => {
+  const pct = Number(mapOffsetXInput.value) || 0;
+  mapOrientation.offsetX = pct / 100;
+  mapOffsetXValue.textContent = pct + '%';
 });
-mapOffsetYInput.addEventListener('change', () => {
-  mapOrientation.offsetY = (Number(mapOffsetYInput.value) || 0) / 100;
-  onOrientationControlChanged();
+mapOffsetXInput.addEventListener('change', persistOrientationChange);
+mapOffsetYInput.addEventListener('input', () => {
+  const pct = Number(mapOffsetYInput.value) || 0;
+  mapOrientation.offsetY = pct / 100;
+  mapOffsetYValue.textContent = pct + '%';
 });
+mapOffsetYInput.addEventListener('change', persistOrientationChange);
 btnResetOrientation.addEventListener('click', () => {
   const fresh = defaultOrientation();
   Object.assign(mapOrientation, fresh);
@@ -468,7 +484,10 @@ btnResetOrientation.addEventListener('click', () => {
   mapScaleInput.value = '1';
   mapOffsetXInput.value = '0';
   mapOffsetYInput.value = '0';
-  onOrientationControlChanged();
+  mapScaleValue.textContent = '1.00';
+  mapOffsetXValue.textContent = '0%';
+  mapOffsetYValue.textContent = '0%';
+  persistOrientationChange();
 });
 
 function loadMapImage() {
@@ -644,7 +663,10 @@ btnNextRound.addEventListener('click', () => {
 
 speedSelect.addEventListener('change', () => { state.speed = Number(speedSelect.value); });
 visionToggle.addEventListener('change', () => { state.showVision = visionToggle.checked; });
-facingOffsetInput.addEventListener('change', () => { facingOffsetDeg = Number(facingOffsetInput.value) || 0; });
+facingOffsetInput.addEventListener('input', () => {
+  facingOffsetDeg = Number(facingOffsetInput.value) || 0;
+  facingOffsetValue.textContent = facingOffsetDeg + '°';
+});
 
 function updateTimeUi() {
   scrubber.max = String(state.durationMs);
