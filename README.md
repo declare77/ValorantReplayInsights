@@ -247,6 +247,7 @@ it doesn't have one) if you want to start over.
 | Map | Rotation | Confirmed by |
 |---|---|---|
 | Sunset | 90°, flipped | Matched against a player's own room-by-room read of a live match, then separately checked against 8 of 10 real player positions taken from an in-game screenshot (see below) |
+| Ascent | 90° | Reported by a user (downloaded minimap art was rotated 90° from the position data) — not yet independently cross-checked against a screenshot the way Sunset was, so if agents still land in the wrong rooms after this, try the Scale/Pan sliders next (small crop mismatch, not a rotation problem) |
 
 If you work out a good rotation for another map, add it to that same table in `app.js` (one line)
 so nobody has to rediscover it — see "How to verify a map's rotation" below.

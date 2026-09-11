@@ -149,6 +149,16 @@ const KNOWN_MAP_ORIENTATIONS = {
   // map (see README). The remaining two were players sprinting at that exact instant, not a
   // problem with the rotation itself.
   '92584fbe-486a-b1b2-9faa-39b0f486b498': { rotate: 90, flipH: true },
+
+  // Ascent -- reported by a user: the downloaded minimap image is rotated 90° from the position
+  // data, and turning it 90° clockwise (this project's `rotate: 90`, confirmed clockwise by
+  // tracing applyOrientation's rotation math against toPixel's canvas-space u/v -> x/y mapping)
+  // fixed it. Not yet independently cross-checked against a screenshot with known player
+  // positions the way Sunset above was -- if agents still don't land in the right rooms after
+  // this, the Scale/Pan sliders (a separate, common mismatch -- see the comment above this table)
+  // are the next thing to try, and https://valorant-api.com/v1/maps/7eaecc1b-4337-bbf6-6ab9-04b8f06b3319
+  // confirms this is in fact Ascent's uuid.
+  '7eaecc1b-4337-bbf6-6ab9-04b8f06b3319': { rotate: 90, flipH: false },
 };
 
 function defaultOrientation(mapUuid) {
