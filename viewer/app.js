@@ -738,18 +738,31 @@ function buildChapters() {
 
   rounds.forEach((r) => {
     const end = r.EndTimeMs == null ? duration : r.EndTimeMs;
-    const widthPct = Math.max(0.5, ((end - r.StartTimeMs) / duration) * 100);
+    const playableStart = playableStartMs(r);
+
+    // Freeze-time (buy phase) segment -- deliberately smaller/dimmer (see .chapter-freeze in
+    // style.css) than the round-play segment next to it, and unlabeled, so it reads as "the
+    // quiet bit before the round" rather than competing with the round number for attention.
+    const freezeWidthPct = Math.max(0.3, ((playableStart - r.StartTimeMs) / duration) * 100);
+    const freezeBtn = document.createElement('button');
+    freezeBtn.className = 'chapter chapter-freeze';
+    freezeBtn.style.flex = '0 0 ' + freezeWidthPct + '%';
+    freezeBtn.title = 'Round ' + r.RoundNumber + ' -- freeze time (buy phase)';
+    freezeBtn.dataset.round = String(r.RoundNumber);
+    freezeBtn.onclick = () => { state.currentTimeMs = r.StartTimeMs; updateTimeUi(); };
+    chaptersEl.appendChild(freezeBtn);
+
+    // Playable round segment.
+    const roundWidthPct = Math.max(0.5, ((end - playableStart) / duration) * 100);
     const btn = document.createElement('button');
     btn.className = 'chapter';
-    btn.style.flex = '0 0 ' + widthPct + '%';
+    btn.style.flex = '0 0 ' + roundWidthPct + '%';
     btn.textContent = 'R' + r.RoundNumber;
-    btn.dataset.start = String(r.StartTimeMs);
     btn.title = 'Round ' + r.RoundNumber + ' -- jumps to end of freeze time, not the buy phase start';
+    btn.dataset.round = String(r.RoundNumber);
     // Jump to when the round is actually playable, not the raw roundStarted (freeze-time-start)
-    // timestamp -- see playableStartMs(). btn.dataset.start above stays keyed to the raw
-    // StartTimeMs regardless, since it's only used as a per-round identity for the "active"
-    // highlight in updateTimeUi(), not as a navigation target.
-    btn.onclick = () => { state.currentTimeMs = playableStartMs(r); updateTimeUi(); };
+    // timestamp -- see playableStartMs().
+    btn.onclick = () => { state.currentTimeMs = playableStart; updateTimeUi(); };
     chaptersEl.appendChild(btn);
   });
 }
@@ -818,8 +831,17 @@ function updateTimeUi() {
     roundLabel.textContent = '';
   }
 
+  // Highlight whichever of the two segments (freeze-time vs playable) for the current round the
+  // playhead is actually in -- not both at once -- so the chapters bar answers "am I still in
+  // the buy phase right now?" at a glance.
   chaptersEl.querySelectorAll('.chapter').forEach((btn) => {
-    btn.classList.toggle('active', !!round && btn.dataset.start === String(round.StartTimeMs));
+    if (!round || btn.dataset.round !== String(round.RoundNumber)) {
+      btn.classList.toggle('active', false);
+      return;
+    }
+    const isFreezeSegment = btn.classList.contains('chapter-freeze');
+    const stillInFreezeTime = state.currentTimeMs < playableStartMs(round);
+    btn.classList.toggle('active', isFreezeSegment === stillInFreezeTime);
   });
 
   // Roster swatches show attack/defense color, which can flip between rounds (halftime) --

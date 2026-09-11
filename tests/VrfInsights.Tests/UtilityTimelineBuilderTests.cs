@@ -195,4 +195,39 @@ public class UtilityTimelineBuilderTests
         Assert.Contains(events, e => e.X == 10);
         Assert.Contains(events, e => e.X == -1042.3);
     }
+
+    [Fact]
+    public void Build_NeverPlacesGekkosPlayerControllerAsAUtilityMarker()
+    {
+        // AggroBot_PC opens once near match start (t=72, in the real export) at Gekko's spawn
+        // point and stays open the whole match -- exactly the "permanent marker at spawn" bug
+        // this was chasing, caused by "AggroBot" itself containing the "Bot" keyword. Confirmed
+        // fixed at the classifier level (UtilityEffectClassifierTests), this is the end-to-end
+        // regression guard.
+        var actors = new List<ActorRow>
+        {
+            MakeActor(670, 72, "open",
+                classPath: "/Game/Characters/AggroBot/AggroBot_PC.AggroBot_PC_C",
+                x: 5700, y: -200, z: 400.4),
+        };
+
+        IReadOnlyList<PersistentEffectEvent> events = UtilityTimelineBuilder.Build(actors);
+
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public void Build_ExcludesWeaponModelActors_EvenIfTheirClassNameAccidentallyMatchesAKeyword()
+    {
+        var actors = new List<ActorRow>
+        {
+            MakeActor(1, 1000, "open",
+                classPath: "/Game/Characters/Deadeye/S0/Ability_X/Gun_Giantslayer/Gun_Deadeye_X_Giantslayer_Prototype_FIreRatePrototype.Gun_Deadeye_X_Giantslayer_Prototype_FireRatePrototype_C",
+                x: 10, y: 20, z: 30),
+        };
+
+        IReadOnlyList<PersistentEffectEvent> events = UtilityTimelineBuilder.Build(actors);
+
+        Assert.Empty(events);
+    }
 }

@@ -1,3 +1,5 @@
+using VrfInsights.Analysis.Common;
+
 namespace VrfInsights.Analysis.Utility;
 
 public enum UtilityCategory
@@ -62,15 +64,52 @@ public static class UtilityEffectClassifier
             return UtilityCategory.Unclassified;
         }
 
+        string maskedPath = MaskAgentCodenames(classPath);
+
         foreach ((string keyword, UtilityCategory category) in Keywords)
         {
-            if (classPath.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            if (maskedPath.Contains(keyword, StringComparison.OrdinalIgnoreCase))
             {
                 return category;
             }
         }
 
         return UtilityCategory.Unclassified;
+    }
+
+    // Longest codename first, so e.g. a shorter codename that happens to be a substring of a
+    // longer one (none currently, but cheap insurance) can't mask over part of the longer one
+    // first and leave a stray fragment behind.
+    private static readonly string[] CodenamesByDescendingLength = AgentCodenames.CodenameToRealName.Keys
+        .OrderByDescending(c => c.Length)
+        .ToArray();
+
+    /// <summary>
+    /// Strips every known agent codename (<see cref="AgentCodenames.CodenameToRealName"/>) out of
+    /// a class path before keyword matching.
+    ///
+    /// <para><b>Confirmed necessary against a real export:</b> Gekko's codename <c>AggroBot</c>
+    /// itself contains the <c>"Bot"</c> keyword, so without this mask every single one of Gekko's
+    /// actors -- including <c>AggroBot_PC</c>, the player controller itself, which opens once near
+    /// match start and stays open for the whole match -- gets misclassified as utility
+    /// <c>DroneOrDeployable</c>. That produces exactly the reported symptom: a permanent "utility"
+    /// marker sitting at Gekko's spawn point for the entire game, never actually deployed. Checked
+    /// against every codename in <see cref="AgentCodenames.CodenameToRealName"/>: `AggroBot`/`Bot`
+    /// is (so far) the only such collision, but this masks all of them defensively rather than
+    /// special-casing just that one, so a future agent whose codename happens to embed a keyword
+    /// doesn't reintroduce the same bug silently.</para>
+    /// </summary>
+    private static string MaskAgentCodenames(string classPath)
+    {
+        string masked = classPath;
+        foreach (string codename in CodenamesByDescendingLength)
+        {
+            if (masked.Contains(codename, StringComparison.OrdinalIgnoreCase))
+            {
+                masked = masked.Replace(codename, string.Empty, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        return masked;
     }
 
     /// <summary>
@@ -106,6 +145,17 @@ public static class UtilityEffectClassifier
     /// </summary>
     public static bool IsAbilityContainerActor(string? classPath) =>
         ClassNameSegment(classPath)?.StartsWith("Ability_", StringComparison.Ordinal) == true;
+
+    /// <summary>
+    /// True for a weapon/gun model actor (e.g. <c>Gun_Deadeye_Q_Pistol</c>,
+    /// <c>Gun_Deadeye_X_Giantslayer_Prototype_FIreRatePrototype</c>) -- never a utility placement,
+    /// but confirmed (via a real export) to sometimes accidentally match a keyword anyway: Chamber's
+    /// ultimate gun class name contains "FIreRatePrototype" (a fire-*rate* stat, nothing to do with
+    /// incendiary utility), which the plain substring match in <see cref="Classify"/> would
+    /// otherwise read as "Fire" -&gt; <see cref="UtilityCategory.IncendiaryOrMolly"/>.
+    /// </summary>
+    public static bool IsWeaponModelActor(string? classPath) =>
+        ClassNameSegment(classPath)?.StartsWith("Gun_", StringComparison.Ordinal) == true;
 
     /// <summary>
     /// Groups actors belonging to the same specific ability (same agent, same ability slot) so

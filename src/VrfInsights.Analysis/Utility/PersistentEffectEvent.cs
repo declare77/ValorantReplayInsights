@@ -78,6 +78,13 @@ public static class UtilityTimelineBuilder
                     continue;
                 }
 
+                if (UtilityEffectClassifier.IsWeaponModelActor(row.ClassPath))
+                {
+                    // A gun/weapon model, never a utility placement -- see
+                    // IsWeaponModelActor's doc comment for the real false-positive this guards.
+                    continue;
+                }
+
                 pending[row.ActorNetGuid] = (row, State.Open);
             }
             else if (row.IsDormant)

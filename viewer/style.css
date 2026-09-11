@@ -153,11 +153,13 @@ footer {
 
 #chapters {
   display: flex;
+  align-items: center; /* lets .chapter-freeze be visibly shorter than .chapter in the same row */
   gap: 2px;
   margin-bottom: 6px;
   height: 22px;
 }
 .chapter {
+  height: 100%;
   background: #1c2530;
   color: var(--text-dim);
   border: none;
@@ -170,45 +172,59 @@ footer {
 .chapter:hover { background: #26313f; color: var(--text); }
 .chapter.active { background: var(--accent); color: #04121f; }
 
+/* The freeze-time (buy phase) segment of each round -- deliberately smaller/dimmer than the
+   round-play segment next to it, so the two read as clearly different kinds of time at a glance. */
+.chapter-freeze {
+  height: 45%;
+  background: #12181f;
+  color: var(--text-dim);
+  opacity: 0.8;
+  font-size: 8px;
+  border: 1px dashed var(--panel-border);
+  border-radius: 2px;
+}
+.chapter-freeze:hover { background: #1a222c; opacity: 1; }
+.chapter-freeze.active { background: var(--accent); opacity: 1; color: #04121f; border-style: solid; }
+
 /* Thicker/custom-styled scrubber -- the native default is a thin ~4px track that's hard to
-   grab precisely, especially over a long match. A bigger track + thumb gives more room to
-   land on the exact moment you want (see also step="1" on the element itself, in index.html,
-   for finer keyboard-arrow nudging). Duplicated across -webkit-/-moz- since range inputs have
-   no shared cross-browser pseudo-elements. */
+   grab precisely, especially over a long match. A bigger track (20px) + thumb (28x38px) gives
+   more room to land on the exact moment you want (see also step="1" on the element itself, in
+   index.html, for finer keyboard-arrow nudging). Duplicated across -webkit-/-moz- since range
+   inputs have no shared cross-browser pseudo-elements. */
 #scrubber {
   width: 100%;
-  margin: 4px 0 8px;
+  margin: 6px 0 10px;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
   cursor: pointer;
 }
 #scrubber::-webkit-slider-runnable-track {
-  height: 12px;
-  border-radius: 6px;
+  height: 20px;
+  border-radius: 8px;
   background: #1c2530;
   border: 1px solid var(--panel-border);
 }
 #scrubber::-webkit-slider-thumb {
   -webkit-appearance: none;
-  margin-top: -7px;
-  width: 22px;
-  height: 26px;
-  border-radius: 5px;
+  margin-top: -9px;
+  width: 28px;
+  height: 38px;
+  border-radius: 6px;
   background: var(--accent);
   border: 1px solid #04121f;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 #scrubber::-moz-range-track {
-  height: 12px;
-  border-radius: 6px;
+  height: 20px;
+  border-radius: 8px;
   background: #1c2530;
   border: 1px solid var(--panel-border);
 }
 #scrubber::-moz-range-thumb {
-  width: 22px;
-  height: 26px;
-  border-radius: 5px;
+  width: 28px;
+  height: 38px;
+  border-radius: 6px;
   background: var(--accent);
   border: 1px solid #04121f;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);

@@ -288,6 +288,18 @@ left`) instead of a round-elapsed time, so it's visually obvious you're still in
 This is **not confirmed for overtime rounds** (25+) — only rounds 1 and 13 were specified, so an OT
 round is treated as a normal 30s round until someone confirms otherwise from a real OT replay.
 
+The round chapters bar reflects the same split: each round is two adjacent buttons now, not one —
+a small, dim, unlabeled freeze-time segment (dashed border) sized to its actual 30s/45s length,
+followed by the labeled `R<N>` round-play segment. Clicking the freeze segment jumps to the raw
+buy-phase start; clicking the round segment jumps to `playableStartMs()`. Only whichever of the
+two segments the playhead is actually in lights up as active, so the bar doubles as a "still in
+the buy phase?" indicator at a glance.
+
+The scrubber itself (`#scrubber` in `viewer/style.css`) is a custom-styled 20px track with a
+28×38px thumb — much thicker than a native range input's ~4px default — plus `step="1"` (was
+`"10"`) for finer keyboard-arrow nudging, both aimed at making it easier to land on an exact
+moment over a long match.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,
@@ -424,6 +436,30 @@ This was confirmed for smoke specifically (Omen, Jett) — it has not been separ
 molly/wall/trap/etc., though the `Ability_*`-exclusion is a general, structural fix (that actor
 type is a per-player container for every ability tree seen in `dump-classes`, not just smoke) and
 should help across the board even where a Zone-preference doesn't apply.
+
+**A second, separate cause of the same "still at spawn" symptom, also confirmed against the real
+export:** `UtilityEffectClassifier`'s keyword matching runs against the *entire* `class_path`
+string, which includes the agent's own codename folder (see "Agent codenames" below) — and Gekko's
+codename, `AggroBot`, itself contains the `"Bot"` keyword (mapped to `DroneOrDeployable`). That
+false-matched almost everything under `/Game/Characters/AggroBot/...`, including `AggroBot_PC` —
+Gekko's player controller, which (like the `Ability_*` containers above) opens once near match
+start at that player's spawn position and stays open for the *entire match* — producing a
+permanent, never-moving "utility" marker sitting at Gekko's spawn point for the whole game. The
+same substring-matching also mis-fires on `Gun_Deadeye_X_Giantslayer_Prototype_FIreRatePrototype`
+(Chamber's ultimate gun class, whose name contains "FIreRatePrototype" — a fire-*rate* stat,
+nothing to do with incendiary utility), reading it as `"Fire"`.
+
+Fixed two ways: `Classify()` now masks every known agent codename
+(`UtilityEffectClassifier.MaskAgentCodenames`, built from `AgentCodenames.CodenameToRealName`) out
+of the class path before keyword matching — checked against all ~29 known codenames, `AggroBot`/
+`Bot` is (so far) the only such collision, but this masks all of them defensively rather than
+special-casing just that one. Separately, `UtilityTimelineBuilder` now also excludes any
+`Gun_*`-prefixed actor (`UtilityEffectClassifier.IsWeaponModelActor`) — a weapon/gun model is never
+a utility placement, whatever it happens to match on. See `UtilityEffectClassifierTests.cs` (the
+`AggroBot`/masking and `Gun_` tests) and `UtilityTimelineBuilderTests.cs`'s
+`Build_NeverPlacesGekkosPlayerControllerAsAUtilityMarker` /
+`Build_ExcludesWeaponModelActors_EvenIfTheirClassNameAccidentallyMatchesAKeyword` for the
+regression coverage, built from the user's real `dump-classes` output.
 
 What's a documented **assumption**, flagged in code comments, and worth checking with
 `dump-fields`/`dump-values`/`dump-classes`/`dump-actors` against your own export before trusting:
