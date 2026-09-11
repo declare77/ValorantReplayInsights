@@ -310,6 +310,7 @@ function initializeFromLoadedData() {
   resolveMap();
   buildRoster();
   buildChapters();
+  logSpawnDebugInfo();
 
   visionToggle.disabled = !state.visionCones;
   visionToggle.checked = false;
@@ -435,6 +436,46 @@ function loadMapImage() {
 
 function showMapOverlay(text) { mapOverlay.textContent = text; mapOverlay.hidden = false; }
 function hideMapOverlay() { mapOverlay.hidden = true; }
+
+/**
+ * Diagnostic aid, printed once per load to the browser console (F12 -> Console tab) — not shown
+ * on screen. If positions look wrong on the minimap (wrong side, clipped into walls, etc.), this
+ * is the first thing to check: for every player's very first recorded sample, it prints the raw
+ * world PosX/PosY, the normalized u/v this project's map transform computes from them, and
+ * whether that u/v actually lands inside the map image (0..1 on both axes). u/v outside [0,1] at
+ * round start is a strong signal of a real transform bug (wrong map detected, wrong multiplier,
+ * swapped axes); u/v just barely inside [0,1] near an edge can be entirely correct data that
+ * simply looks clipped on screen because player icons are drawn at a fixed pixel radius
+ * (AGENT_ICON_RADIUS_PX) regardless of how close the real spawn point is to a wall.
+ */
+function logSpawnDebugInfo() {
+  if (!state.map) {
+    console.log('[vrf-viewer] No map resolved yet -- spawn debug info will print once you pick a map above.');
+    return;
+  }
+
+  const rows = state.tracks.map((track) => {
+    const sample = track.Samples && track.Samples[0];
+    if (!sample) return null;
+    const uv = worldToUv(sample.PosX, sample.PosY, state.map);
+    return {
+      player: (track.Player && (track.Player.AgentName || playerKey(track.Player))) || '(unknown)',
+      PosX: sample.PosX,
+      PosY: sample.PosY,
+      u: Number(uv.u.toFixed(4)),
+      v: Number(uv.v.toFixed(4)),
+      insideImage: uv.u >= 0 && uv.u <= 1 && uv.v >= 0 && uv.v <= 1,
+    };
+  }).filter(Boolean);
+
+  console.log(
+    '[vrf-viewer] Map:', state.map.displayName,
+    ' xMultiplier/yMultiplier/xScalarToAdd/yScalarToAdd:',
+    state.map.xMultiplier, state.map.yMultiplier, state.map.xScalarToAdd, state.map.yScalarToAdd
+  );
+  console.log('[vrf-viewer] Spawn-frame positions (u/v should be within 0..1 -- see comment above logSpawnDebugInfo in app.js):');
+  console.table(rows);
+}
 
 // ---------------------------------------------------------------------------
 // Roster / chapters
