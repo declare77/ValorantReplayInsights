@@ -205,139 +205,6 @@ function toPixel(x, y, w, h) {
   return { x: u * w, y: v * h };
 }
 
-function updateFitModeStatus() {
-  fitModeStatus.textContent = mapCalibration
-    ? 'Using: calibrated fit (' + mapCalibration.points.length + ' point(s)) -- sliders above are ignored'
-    : 'Using: manual sliders above';
-}
-
-/** Reloads calibration state for whichever map is now current -- call whenever state.map
- * changes (initial resolve, or the map dropdown override). */
-function refreshCalibrationForCurrentMap() {
-  const uuid = state.map && state.map.uuid;
-  mapCalibration = loadMapCalibration(uuid);
-  calibrationPoints = mapCalibration ? mapCalibration.points.slice() : [];
-  renderCalibratePointsTable();
-  updateFitModeStatus();
-}
-
-function buildCalibratePlayerList() {
-  calibratePlayerSelect.innerHTML = '';
-  (state.match.Players || []).forEach((p) => {
-    const opt = document.createElement('option');
-    opt.value = playerKey(p);
-    opt.textContent = p.AgentName || playerKey(p);
-    calibratePlayerSelect.appendChild(opt);
-  });
-}
-
-function renderCalibratePointsTable() {
-  calibratePointsBody.innerHTML = '';
-  calibrationPoints.forEach((p, idx) => {
-    const tr = document.createElement('tr');
-    const cells = [
-      p.player,
-      formatClock(p.timeMs),
-      p.x.toFixed(0),
-      p.y.toFixed(0),
-      (p.u * 100).toFixed(1) + '%, ' + (p.v * 100).toFixed(1) + '%',
-    ];
-    for (const text of cells) {
-      const td = document.createElement('td');
-      td.textContent = text;
-      tr.appendChild(td);
-    }
-    const actionTd = document.createElement('td');
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.textContent = '✕';
-    removeBtn.title = 'Remove this point';
-    removeBtn.onclick = () => { calibrationPoints.splice(idx, 1); renderCalibratePointsTable(); };
-    actionTd.appendChild(removeBtn);
-    tr.appendChild(actionTd);
-    calibratePointsBody.appendChild(tr);
-  });
-}
-
-btnCalibratePick.addEventListener('click', () => {
-  if (!calibratePlayerSelect.value) {
-    calibrateStatus.textContent = 'Pick a player first.';
-    return;
-  }
-  calibratePicking = true;
-  btnCalibratePick.classList.add('armed');
-  btnCalibratePick.textContent = 'Click the map now...';
-  canvas.classList.add('calibrating');
-  calibrateStatus.textContent = 'Click the exact spot on the map where that player really is right now.';
-});
-
-canvas.addEventListener('click', (e) => {
-  if (!calibratePicking) return;
-  calibratePicking = false;
-  btnCalibratePick.classList.remove('armed');
-  btnCalibratePick.textContent = 'Pick location on map';
-  canvas.classList.remove('calibrating');
-
-  const key = calibratePlayerSelect.value;
-  const track = state.tracks.find((t) => playerKey(t.Player) === key);
-  const sample = track && interpolateSample(track.Samples, state.currentTimeMs);
-  if (!sample) {
-    calibrateStatus.textContent = "Couldn't find that player's position at the current time -- try again.";
-    return;
-  }
-
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
-  const px = (e.clientX - rect.left) * scaleX;
-  const py = (e.clientY - rect.top) * scaleY;
-
-  calibrationPoints.push({
-    player: calibratePlayerSelect.options[calibratePlayerSelect.selectedIndex].textContent,
-    timeMs: state.currentTimeMs,
-    x: sample.PosX,
-    y: sample.PosY,
-    u: px / canvas.width,
-    v: py / canvas.height,
-  });
-  renderCalibratePointsTable();
-  calibrateStatus.textContent = calibrationPoints.length + ' point(s) recorded so far.';
-});
-
-btnCalibrateCompute.addEventListener('click', () => {
-  if (calibrationPoints.length < 3) {
-    calibrateResult.textContent = 'Need at least 3 points (spread across different areas of the map) to compute a fit.';
-    return;
-  }
-  const fit = solveAffine(calibrationPoints);
-  if (!fit) {
-    calibrateResult.textContent = "Those points are too close together or in a line to solve -- pick points spread across different, well-separated areas of the map.";
-    return;
-  }
-
-  let worstErrorPct = 0;
-  for (const p of calibrationPoints) {
-    const pu = fit.A * p.x + fit.B * p.y + fit.C;
-    const pv = fit.D * p.x + fit.E * p.y + fit.F;
-    worstErrorPct = Math.max(worstErrorPct, Math.hypot(pu - p.u, pv - p.v) * 100);
-  }
-
-  mapCalibration = Object.assign({}, fit, { points: calibrationPoints.slice() });
-  saveMapCalibration(state.map && state.map.uuid, mapCalibration);
-  updateFitModeStatus();
-  calibrateResult.textContent = 'Saved -- worst point is off by ' + worstErrorPct.toFixed(1) +
-    '% of the map. If that looks too high, add more points (especially anywhere it still looks ' +
-    'off) and compute again -- it recalculates from every point currently in the table.';
-});
-
-btnCalibrateClear.addEventListener('click', () => {
-  mapCalibration = null;
-  calibrationPoints = [];
-  clearMapCalibrationStorage(state.map && state.map.uuid);
-  renderCalibratePointsTable();
-  updateFitModeStatus();
-  calibrateResult.textContent = 'Calibration cleared -- back to the manual sliders above.';
-});
-
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -506,6 +373,143 @@ const calibratePointsBody = document.getElementById('calibratePointsBody');
 const btnCalibrateCompute = document.getElementById('btnCalibrateCompute');
 const btnCalibrateClear = document.getElementById('btnCalibrateClear');
 const calibrateResult = document.getElementById('calibrateResult');
+
+// ---------------------------------------------------------------------------
+// Map calibration (DOM-dependent part -- state/math live earlier, near toPixel)
+// ---------------------------------------------------------------------------
+
+function updateFitModeStatus() {
+  fitModeStatus.textContent = mapCalibration
+    ? 'Using: calibrated fit (' + mapCalibration.points.length + ' point(s)) -- sliders above are ignored'
+    : 'Using: manual sliders above';
+}
+
+/** Reloads calibration state for whichever map is now current -- call whenever state.map
+ * changes (initial resolve, or the map dropdown override). */
+function refreshCalibrationForCurrentMap() {
+  const uuid = state.map && state.map.uuid;
+  mapCalibration = loadMapCalibration(uuid);
+  calibrationPoints = mapCalibration ? mapCalibration.points.slice() : [];
+  renderCalibratePointsTable();
+  updateFitModeStatus();
+}
+
+function buildCalibratePlayerList() {
+  calibratePlayerSelect.innerHTML = '';
+  (state.match.Players || []).forEach((p) => {
+    const opt = document.createElement('option');
+    opt.value = playerKey(p);
+    opt.textContent = p.AgentName || playerKey(p);
+    calibratePlayerSelect.appendChild(opt);
+  });
+}
+
+function renderCalibratePointsTable() {
+  calibratePointsBody.innerHTML = '';
+  calibrationPoints.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    const cells = [
+      p.player,
+      formatClock(p.timeMs),
+      p.x.toFixed(0),
+      p.y.toFixed(0),
+      (p.u * 100).toFixed(1) + '%, ' + (p.v * 100).toFixed(1) + '%',
+    ];
+    for (const text of cells) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    const actionTd = document.createElement('td');
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Remove this point';
+    removeBtn.onclick = () => { calibrationPoints.splice(idx, 1); renderCalibratePointsTable(); };
+    actionTd.appendChild(removeBtn);
+    tr.appendChild(actionTd);
+    calibratePointsBody.appendChild(tr);
+  });
+}
+
+btnCalibratePick.addEventListener('click', () => {
+  if (!calibratePlayerSelect.value) {
+    calibrateStatus.textContent = 'Pick a player first.';
+    return;
+  }
+  calibratePicking = true;
+  btnCalibratePick.classList.add('armed');
+  btnCalibratePick.textContent = 'Click the map now...';
+  canvas.classList.add('calibrating');
+  calibrateStatus.textContent = 'Click the exact spot on the map where that player really is right now.';
+});
+
+canvas.addEventListener('click', (e) => {
+  if (!calibratePicking) return;
+  calibratePicking = false;
+  btnCalibratePick.classList.remove('armed');
+  btnCalibratePick.textContent = 'Pick location on map';
+  canvas.classList.remove('calibrating');
+
+  const key = calibratePlayerSelect.value;
+  const track = state.tracks.find((t) => playerKey(t.Player) === key);
+  const sample = track && interpolateSample(track.Samples, state.currentTimeMs);
+  if (!sample) {
+    calibrateStatus.textContent = "Couldn't find that player's position at the current time -- try again.";
+    return;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+  const px = (e.clientX - rect.left) * scaleX;
+  const py = (e.clientY - rect.top) * scaleY;
+
+  calibrationPoints.push({
+    player: calibratePlayerSelect.options[calibratePlayerSelect.selectedIndex].textContent,
+    timeMs: state.currentTimeMs,
+    x: sample.PosX,
+    y: sample.PosY,
+    u: px / canvas.width,
+    v: py / canvas.height,
+  });
+  renderCalibratePointsTable();
+  calibrateStatus.textContent = calibrationPoints.length + ' point(s) recorded so far.';
+});
+
+btnCalibrateCompute.addEventListener('click', () => {
+  if (calibrationPoints.length < 3) {
+    calibrateResult.textContent = 'Need at least 3 points (spread across different areas of the map) to compute a fit.';
+    return;
+  }
+  const fit = solveAffine(calibrationPoints);
+  if (!fit) {
+    calibrateResult.textContent = "Those points are too close together or in a line to solve -- pick points spread across different, well-separated areas of the map.";
+    return;
+  }
+
+  let worstErrorPct = 0;
+  for (const p of calibrationPoints) {
+    const pu = fit.A * p.x + fit.B * p.y + fit.C;
+    const pv = fit.D * p.x + fit.E * p.y + fit.F;
+    worstErrorPct = Math.max(worstErrorPct, Math.hypot(pu - p.u, pv - p.v) * 100);
+  }
+
+  mapCalibration = Object.assign({}, fit, { points: calibrationPoints.slice() });
+  saveMapCalibration(state.map && state.map.uuid, mapCalibration);
+  updateFitModeStatus();
+  calibrateResult.textContent = 'Saved -- worst point is off by ' + worstErrorPct.toFixed(1) +
+    '% of the map. If that looks too high, add more points (especially anywhere it still looks ' +
+    'off) and compute again -- it recalculates from every point currently in the table.';
+});
+
+btnCalibrateClear.addEventListener('click', () => {
+  mapCalibration = null;
+  calibrationPoints = [];
+  clearMapCalibrationStorage(state.map && state.map.uuid);
+  renderCalibratePointsTable();
+  updateFitModeStatus();
+  calibrateResult.textContent = 'Calibration cleared -- back to the manual sliders above.';
+});
 
 // ---------------------------------------------------------------------------
 // Loading
