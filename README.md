@@ -273,6 +273,21 @@ by, so no extra identity resolution was needed. `events.json` is optional in the
 output folders that predate this feature won't have it); without it, players simply don't disappear
 on death, same as before this feature existed.
 
+### Round timing (freeze time)
+
+vrfkit's `roundStarted` event — and so `RoundInfo.StartTimeMs`, from the C# side's
+`RoundTimelineBuilder` — fires at the *start* of freeze time (the buy phase), not the moment
+players are actually free to move. The viewer accounts for this: `playableStartMs()` in
+`viewer/app.js` adds a freeze-time length on top of that raw timestamp — 45s for rounds 1 and 13
+(the first round of each regulation half), 30s otherwise, per VALORANT's standard rules — and
+that's what "Round N" navigation (the round chapters, restart/next-round buttons, and the "Round N
+· 0:00" readout next to the scrubber) is actually anchored to, not the raw `roundStarted` moment.
+Scrub to a time still inside freeze time and the readout shows a countdown (e.g. `freeze 0:12
+left`) instead of a round-elapsed time, so it's visually obvious you're still in the buy phase.
+
+This is **not confirmed for overtime rounds** (25+) — only rounds 1 and 13 were specified, so an OT
+round is treated as a normal 30s round until someone confirms otherwise from a real OT replay.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,

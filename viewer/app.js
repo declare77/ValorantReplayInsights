@@ -39,6 +39,28 @@ const PLAYER_COLORS = [
 const TEAM_COLOR_ATTACK = '#ff4d4d';
 const TEAM_COLOR_DEFEND = '#4ade80';
 
+// Freeze time (buy phase) length, in ms -- user-supplied domain knowledge, not derived from any
+// replay data (vrfkit doesn't carry a buy-phase-length field; RoundInfo.StartTimeMs is the
+// `roundStarted` event, which per the C# project's own AbilityCastBuilder remarks fires at the
+// START of freeze time, not when players are actually free to move -- see freezeTimeMsForRound()
+// and playableStartMs() below, which correct for this). Only rounds 1 and 13 (first round of each
+// regulation half) are known to differ from the standard 30s -- overtime rounds (25+) are NOT
+// covered here since their freeze time wasn't specified; they'll be (possibly incorrectly) treated
+// as a normal 30s round until confirmed otherwise.
+const FREEZE_TIME_MS_FIRST_OF_HALF = 45000;
+const FREEZE_TIME_MS_DEFAULT = 30000;
+
+function freezeTimeMsForRound(roundNumber) {
+  return (roundNumber === 1 || roundNumber === 13) ? FREEZE_TIME_MS_FIRST_OF_HALF : FREEZE_TIME_MS_DEFAULT;
+}
+
+/** The moment freeze time actually ends and players can move/shoot/plant -- as opposed to
+ * RoundInfo.StartTimeMs, which is when freeze time *begins*. Use this, not r.StartTimeMs
+ * directly, anywhere "round start" is meant in the gameplay sense. */
+function playableStartMs(round) {
+  return round.StartTimeMs + freezeTimeMsForRound(round.RoundNumber);
+}
+
 const UTILITY_COLORS = {
   Smoke: 'rgba(200,200,200,0.55)',
   IncendiaryOrMolly: 'rgba(255,120,40,0.65)',
@@ -722,8 +744,12 @@ function buildChapters() {
     btn.style.flex = '0 0 ' + widthPct + '%';
     btn.textContent = 'R' + r.RoundNumber;
     btn.dataset.start = String(r.StartTimeMs);
-    btn.title = 'Round ' + r.RoundNumber;
-    btn.onclick = () => { state.currentTimeMs = r.StartTimeMs; updateTimeUi(); };
+    btn.title = 'Round ' + r.RoundNumber + ' -- jumps to end of freeze time, not the buy phase start';
+    // Jump to when the round is actually playable, not the raw roundStarted (freeze-time-start)
+    // timestamp -- see playableStartMs(). btn.dataset.start above stays keyed to the raw
+    // StartTimeMs regardless, since it's only used as a per-round identity for the "active"
+    // highlight in updateTimeUi(), not as a navigation target.
+    btn.onclick = () => { state.currentTimeMs = playableStartMs(r); updateTimeUi(); };
     chaptersEl.appendChild(btn);
   });
 }
@@ -747,11 +773,13 @@ btnPlayPause.addEventListener('click', () => {
 btnRestartRound.addEventListener('click', () => {
   const rounds = state.match.Rounds || [];
   const current = findRoundAt(rounds, state.currentTimeMs);
-  if (current && state.currentTimeMs - current.StartTimeMs > 3000) {
-    state.currentTimeMs = current.StartTimeMs;
+  // Jump to when the round is actually playable (after freeze time), not the raw
+  // roundStarted timestamp -- see playableStartMs().
+  if (current && state.currentTimeMs - playableStartMs(current) > 3000) {
+    state.currentTimeMs = playableStartMs(current);
   } else {
     const idx = rounds.indexOf(current);
-    state.currentTimeMs = idx > 0 ? rounds[idx - 1].StartTimeMs : 0;
+    state.currentTimeMs = idx > 0 ? playableStartMs(rounds[idx - 1]) : 0;
   }
   updateTimeUi();
 });
@@ -760,7 +788,7 @@ btnNextRound.addEventListener('click', () => {
   const rounds = state.match.Rounds || [];
   const current = findRoundAt(rounds, state.currentTimeMs);
   const idx = rounds.indexOf(current);
-  state.currentTimeMs = (idx >= 0 && idx + 1 < rounds.length) ? rounds[idx + 1].StartTimeMs : state.durationMs;
+  state.currentTimeMs = (idx >= 0 && idx + 1 < rounds.length) ? playableStartMs(rounds[idx + 1]) : state.durationMs;
   updateTimeUi();
 });
 
@@ -777,7 +805,18 @@ function updateTimeUi() {
   timeLabel.textContent = formatClock(state.currentTimeMs) + ' / ' + formatClock(state.durationMs);
 
   const round = findRoundAt(state.match.Rounds || [], state.currentTimeMs);
-  roundLabel.textContent = round ? ('Round ' + round.RoundNumber) : '';
+  if (round) {
+    // Relative to playableStartMs (end of freeze time), not round.StartTimeMs (start of freeze
+    // time) -- so this reads 0:00 at the moment the round actually becomes playable, matching
+    // what "Round N, 0:00" means in-game, rather than at the buy-phase barrier drop.
+    const relativeMs = state.currentTimeMs - playableStartMs(round);
+    const roundClock = relativeMs < 0
+      ? ('freeze ' + formatClock(-relativeMs) + ' left')
+      : formatClock(relativeMs);
+    roundLabel.textContent = 'Round ' + round.RoundNumber + ' · ' + roundClock;
+  } else {
+    roundLabel.textContent = '';
+  }
 
   chaptersEl.querySelectorAll('.chapter').forEach((btn) => {
     btn.classList.toggle('active', !!round && btn.dataset.start === String(round.StartTimeMs));
