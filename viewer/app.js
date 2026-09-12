@@ -97,10 +97,22 @@ const WALL_HALF_LENGTH_UNITS = 400;
 // despawn/toggle time -- a deliberate stylization the user asked for ("a green line along the
 // path of the wall that stays for the whole round"), not a claim about the gas's actual live
 // on/off state (Toxic Screen can be toggled on and off multiple times off a shared fuel meter;
-// this just marks "a wall went up somewhere around here this round"). In real VALORANT, Toxic
-// Screen is also a much longer straight line than Sage's Wall (which WALL_HALF_LENGTH_UNITS was
-// sized for) -- this is a rough multiple, not measured against a real replay's actual coordinates.
-const VIPER_WALL_HALF_LENGTH_UNITS = 1400;
+// this just marks "a wall went up somewhere around here this round").
+//
+// Length: Riot doesn't publish this in-game, but community-tested numbers (wiki.playvalorant.com,
+// "manually tested to be very accurate") put Toxic Screen's maximum length at 60 meters. This
+// project's own coordinate system is already confirmed to be in centimeters, same as Unreal's own
+// default (1 uu = 1 cm) -- see VisionConeCalculator.EyeHeightCm (155, a real human eye height in
+// cm) and DefaultRangeCm (18,000 = 180m, a plausible sight-line distance) for that confirmation --
+// so 60m converts to 6000 units, i.e. a HALF-length of 3000. This is still an approximation in two
+// ways this project can't fix without real per-cast field data: (1) it draws every cast at the
+// real maximum length, when in-game the wall is often shorter because it stops at the first wall/
+// piece of map geometry it hits (this project has no collision data to truncate against); (2)
+// YawDegrees (the direction the line is drawn in) is the wall actor's own
+// actors.parquet spawn_yaw -- plausibly Viper's aim direction at cast time, the same way the real
+// ability works, but not independently confirmed for this specific actor the way it is for e.g.
+// smoke actors elsewhere in this file.
+const VIPER_WALL_HALF_LENGTH_UNITS = 3000;
 // A yellow-green ("toxic gas") shade rather than a plain green -- the map's own attack/defense
 // legend already uses a teal-green (#4ade80) for the defending side, and this shouldn't read as
 // team-side coloring.

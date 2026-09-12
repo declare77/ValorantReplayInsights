@@ -36,12 +36,26 @@ public static class UtilityEffectClassifier
     public static readonly (string Keyword, UtilityCategory Category)[] Keywords =
     {
         ("Smoke", UtilityCategory.Smoke),
-        ("Cloud", UtilityCategory.Smoke),
+        ("Cloud", UtilityCategory.Smoke),  // must stay ahead of "Poison" below -- Viper's Poison
+                                            // Cloud (Q) should classify as Smoke, not Wall, and its
+                                            // class name almost certainly contains both words.
         ("Molly", UtilityCategory.IncendiaryOrMolly),
         ("Incendiary", UtilityCategory.IncendiaryOrMolly),
         ("Fire", UtilityCategory.IncendiaryOrMolly),
         ("Wall", UtilityCategory.Wall),
         ("Barrier", UtilityCategory.Wall),
+        // "Toxic"/"Poison" -- a defensive guess at Viper's Toxic Screen (E), added because it
+        // wasn't matching "Wall"/"Barrier" at all (see UtilityTimelineBuilder: an unclassified
+        // actor is dropped before it ever reaches utility.json, which is almost certainly why it
+        // wasn't drawing). Viper has never actually been seen in a real export by this project
+        // (see docs/AGENT_ABILITIES.md), so her ability class names, unlike the 8 confirmed
+        // agents', are a total unknown -- "Toxic"/"Poison" are a bet that Riot's own internal name
+        // uses her ability's real English name the way "Molly"/"Incendiary"/"Flash" above already
+        // do for other agents, not something confirmed via dump-classes. If this still doesn't
+        // show up, run `dump-classes ./export | grep -i pandemic` (her dev codename) against a
+        // real export with Viper in it and add whatever her actual class name uses here instead.
+        ("Toxic", UtilityCategory.Wall),
+        ("Poison", UtilityCategory.Wall),
         ("Trap", UtilityCategory.TrapOrMine),
         ("Mine", UtilityCategory.TrapOrMine),
         ("Cage", UtilityCategory.TrapOrMine),

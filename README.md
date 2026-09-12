@@ -529,11 +529,9 @@ handling above: a fixed-length purple line for orientation, plus the real abilit
 midpoint once one resolves, faded in/out on the actor's own real spawn/despawn window. **Viper's
 Toxic Screen deliberately does none of that** — no icon, a distinct yellow-green "toxic gas" line
 (not the map's own attack/red-vs-defense/teal-green legend colors, so it doesn't read as team-side
-coloring), a longer line (`VIPER_WALL_HALF_LENGTH_UNITS` in `viewer/app.js` — Toxic Screen is much
-longer in real VALORANT than Sage's Wall, which the generic length was sized for; this multiple is
-a guess, not measured against a real replay's coordinates), and a different visibility rule: shown
-from the moment it's cast until the **end of that round** (found via `match.json`'s `Rounds`),
-regardless of the RPC's own real despawn/toggle time.
+coloring), a longer line, and a different visibility rule: shown from the moment it's cast until
+the **end of that round** (found via `match.json`'s `Rounds`), regardless of the RPC's own real
+despawn/toggle time.
 
 That last part is a deliberate stylization, requested for readability rather than accuracy: Toxic
 Screen actually toggles on/off multiple times off a shared fuel meter within a round, and this
@@ -541,6 +539,39 @@ project doesn't attempt to track that live on/off state — the round-long line 
 went up somewhere around here this round," which is more useful for reviewing a round's setups
 than a line that flickers with the gas's exact live state (and matches how a player mentally tracks
 it — "Viper walled here this round" — more than a strictly accurate on/off animation would).
+
+**Why it didn't show up at all at first, and the fix.** Viper is the one agent in this whole
+project that has **never actually been seen in a real export** (see "About the ability-level
+codenames" in `docs/AGENT_ABILITIES.md`) — every other agent-specific piece of code here was at
+least checked against one real class name for that agent; Viper's wasn't. The classifier only
+matched `"Wall"`/`"Barrier"` for the whole `Wall` category, and `UtilityTimelineBuilder` silently
+drops anything that classification doesn't recognize (`Category == Unclassified`) before it ever
+reaches `utility.json` — so if Toxic Screen's real internal class name doesn't happen to contain
+either word, nothing was ever emitted for it to draw in the first place, independent of anything
+the viewer does. Fixed defensively, not confirmed: `UtilityEffectClassifier.Keywords` now also
+matches `"Toxic"`/`"Poison"` (ordered after `"Cloud"`, so Poison Cloud still classifies as `Smoke`
+rather than `Wall`) — a bet that Riot's internal name uses the ability's real English name the way
+`"Molly"`/`"Flash"`/etc. already do for other agents, not something checked via `dump-classes`
+against a real Viper cast. **If it still doesn't show up**, run
+`dotnet run --project src/VrfInsights.Cli -- dump-classes ./export` against a real export that has
+Viper in it and search the output for her dev codename (`Pandemic` — see `AgentCodenames.cs`); once
+you have her wall's actual class name, add whatever word it actually uses to that `Keywords` array
+(it's a plain, freely-editable list) instead of guessing further.
+
+**The line's length.** Riot doesn't publish this, but community-tested numbers (see
+[wiki.playvalorant.com's Toxic Screen page](https://wiki.playvalorant.com/en-us/Toxic_Screen),
+"manually tested to be very accurate") put its maximum length at 60 meters. This project's
+coordinate system is already confirmed to be centimeters, matching Unreal's own default
+(`VisionConeCalculator.EyeHeightCm` is 155 — a real human eye height in cm — and its
+`DefaultRangeCm` is 18,000, i.e. 180m, a plausible sight-line distance), so 60m becomes 6,000 units
+— `VIPER_WALL_HALF_LENGTH_UNITS` in `viewer/app.js` is half that. Two things this still can't
+account for without more data: the wall is drawn at this maximum length on every cast, when in-game
+it's often shorter because it stops at the first piece of map geometry it hits (no collision data
+available to truncate against); and the line's *direction* is the wall actor's own
+`actors.parquet` `spawn_yaw` (`YawDegrees`) — plausibly Viper's aim direction at cast time, the same
+way the real ability works, but — same as the class-name guess above — not independently confirmed
+for this specific actor, since Viper has never been checked against a real export.
+
 Matched by `AgentRealName === 'Viper'` on a `Wall`-category `utility.json` entry — same
 agent-attribution confidence as everywhere else `AgentRealName` is used (see above), no separate
 verification done for Viper's wall specifically.
