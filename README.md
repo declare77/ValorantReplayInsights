@@ -522,6 +522,29 @@ checked against your own export; the viewer's Debug info panel now includes an `
 per utility marker (which ability it resolved to and its match score, or that it fell back to a
 colored shape) specifically so you can check this yourself rather than take it on faith.
 
+### Viper's wall: a special case, not an icon
+
+Every other Wall-category ability (Sage's Barrier Orb, KAY/O's Zero/Point, etc.) uses the generic
+handling above: a fixed-length purple line for orientation, plus the real ability icon at its
+midpoint once one resolves, faded in/out on the actor's own real spawn/despawn window. **Viper's
+Toxic Screen deliberately does none of that** — no icon, a distinct yellow-green "toxic gas" line
+(not the map's own attack/red-vs-defense/teal-green legend colors, so it doesn't read as team-side
+coloring), a longer line (`VIPER_WALL_HALF_LENGTH_UNITS` in `viewer/app.js` — Toxic Screen is much
+longer in real VALORANT than Sage's Wall, which the generic length was sized for; this multiple is
+a guess, not measured against a real replay's coordinates), and a different visibility rule: shown
+from the moment it's cast until the **end of that round** (found via `match.json`'s `Rounds`),
+regardless of the RPC's own real despawn/toggle time.
+
+That last part is a deliberate stylization, requested for readability rather than accuracy: Toxic
+Screen actually toggles on/off multiple times off a shared fuel meter within a round, and this
+project doesn't attempt to track that live on/off state — the round-long line just marks "a wall
+went up somewhere around here this round," which is more useful for reviewing a round's setups
+than a line that flickers with the gas's exact live state (and matches how a player mentally tracks
+it — "Viper walled here this round" — more than a strictly accurate on/off animation would).
+Matched by `AgentRealName === 'Viper'` on a `Wall`-category `utility.json` entry — same
+agent-attribution confidence as everywhere else `AgentRealName` is used (see above), no separate
+verification done for Viper's wall specifically.
+
 ### The ticker (right-hand panel)
 
 The right side of the viewer shows a live per-player panel next to the minimap: agent icon,

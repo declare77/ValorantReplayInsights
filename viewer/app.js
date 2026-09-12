@@ -90,6 +90,21 @@ const UTILITY_COLORS = {
 // Visual approximations only -- see file header. Units are VALORANT/Unreal world units.
 const UTILITY_AREA_RADIUS_UNITS = 350;   // smokes / mollies
 const WALL_HALF_LENGTH_UNITS = 400;
+
+// Viper's Toxic Screen (see drawUtility's Viper-specific branch) is drawn distinctly from every
+// other Wall-category ability: a plain green line along its placement, with no ability icon on
+// top, and shown for the whole round it was cast in rather than fading at the RPC's own real
+// despawn/toggle time -- a deliberate stylization the user asked for ("a green line along the
+// path of the wall that stays for the whole round"), not a claim about the gas's actual live
+// on/off state (Toxic Screen can be toggled on and off multiple times off a shared fuel meter;
+// this just marks "a wall went up somewhere around here this round"). In real VALORANT, Toxic
+// Screen is also a much longer straight line than Sage's Wall (which WALL_HALF_LENGTH_UNITS was
+// sized for) -- this is a rough multiple, not measured against a real replay's actual coordinates.
+const VIPER_WALL_HALF_LENGTH_UNITS = 1400;
+// A yellow-green ("toxic gas") shade rather than a plain green -- the map's own attack/defense
+// legend already uses a teal-green (#4ade80) for the defending side, and this shouldn't read as
+// team-side coloring.
+const VIPER_WALL_COLOR = 'rgba(150,220,40,0.9)';
 const ABILITY_MARKER_FADE_MS = 1500;
 const AGENT_ICON_RADIUS_PX = 12;
 const FACING_LOOKAHEAD_UNITS = 220;
@@ -2381,15 +2396,44 @@ function drawUtility(w, h) {
   const t = state.currentTimeMs;
   for (const u of state.utility) {
     if (u.X == null || u.Y == null) continue;
-    if (t < u.SpawnTimeMs) continue;
-    if (u.DespawnTimeMs != null && t >= u.DespawnTimeMs) continue;
+
+    // Viper's Toxic Screen gets its own visibility window instead of the usual
+    // [SpawnTimeMs, DespawnTimeMs) one -- see VIPER_WALL_HALF_LENGTH_UNITS's doc comment. It's
+    // shown from the moment it was cast until the end of THAT round (found via the round its
+    // SpawnTimeMs falls in), then disappears, regardless of the RPC's own real despawn/toggle
+    // time. A round lookup miss (e.g. match.json has no Rounds for some reason) falls back to the
+    // normal spawn/despawn window rather than showing nothing.
+    const isViperWall = u.Category === 'Wall' && u.AgentRealName === 'Viper';
+    let viperRound = null;
+    if (isViperWall) {
+      viperRound = findRoundAt(state.match.Rounds || [], u.SpawnTimeMs);
+    }
+
+    if (isViperWall && viperRound) {
+      if (t < u.SpawnTimeMs || (viperRound.EndTimeMs != null && t >= viperRound.EndTimeMs)) continue;
+    } else {
+      if (t < u.SpawnTimeMs) continue;
+      if (u.DespawnTimeMs != null && t >= u.DespawnTimeMs) continue;
+    }
 
     const origin = toPixel(u.X, u.Y, w, h);
     const px = origin.x, py = origin.y;
     const color = UTILITY_COLORS[u.Category] || 'rgba(255,255,255,0.6)';
     const icon = resolveUtilityIconImage(u);
 
-    if (u.Category === 'Wall') {
+    if (isViperWall) {
+      // A plain green line, no ability icon on top -- the user specifically asked for this
+      // instead of the API-fetched icon this category otherwise gets.
+      const yaw = (u.YawDegrees || 0) * Math.PI / 180;
+      const p1 = toPixel(u.X - Math.cos(yaw) * VIPER_WALL_HALF_LENGTH_UNITS, u.Y - Math.sin(yaw) * VIPER_WALL_HALF_LENGTH_UNITS, w, h);
+      const p2 = toPixel(u.X + Math.cos(yaw) * VIPER_WALL_HALF_LENGTH_UNITS, u.Y + Math.sin(yaw) * VIPER_WALL_HALF_LENGTH_UNITS, w, h);
+      ctx.strokeStyle = VIPER_WALL_COLOR;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    } else if (u.Category === 'Wall') {
       const yaw = (u.YawDegrees || 0) * Math.PI / 180;
       const p1 = toPixel(u.X - Math.cos(yaw) * WALL_HALF_LENGTH_UNITS, u.Y - Math.sin(yaw) * WALL_HALF_LENGTH_UNITS, w, h);
       const p2 = toPixel(u.X + Math.cos(yaw) * WALL_HALF_LENGTH_UNITS, u.Y + Math.sin(yaw) * WALL_HALF_LENGTH_UNITS, w, h);
