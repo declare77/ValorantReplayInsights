@@ -15,7 +15,13 @@ namespace VrfInsights.Data.Manifest;
 /// contains it.</item>
 /// <item><see cref="NetFieldExportGroups"/> and <c>quality</c> are left as raw
 /// <see cref="System.Text.Json.JsonElement"/> rather than fully modeled — they're diagnostic /
-/// completeness-accounting data this project doesn't currently need structured.</item>
+/// completeness-accounting data this project doesn't currently need structured, with one
+/// exception: <c>VrfInsights.Analysis.Weapons.GameplayTagTable</c> (in the Analysis project,
+/// which references this one, not the other way around — hence the plain type name here rather
+/// than a resolvable <c>&lt;see cref&gt;</c>) reads one specific entry out of
+/// <see cref="NetFieldExportGroups"/> (the one whose <c>path</c> is
+/// <c>"NetworkGameplayTagNodeIndex"</c>) to resolve shot-event gameplay-tag handles to names —
+/// see that class's doc comment for why this can't be hardcoded.</item>
 /// </list>
 /// </summary>
 public sealed class ReplayManifest
@@ -59,6 +65,14 @@ public sealed class ReplayManifest
     /// BombPlayerState actor.</summary>
     [JsonPropertyName("players")]
     public List<ManifestPlayer> Players { get; set; } = new();
+
+    /// <summary>Raw, unmodeled — vrfkit's own per-class field-export schema dump. This project
+    /// only reads one entry out of it (see <c>VrfInsights.Analysis.Weapons.GameplayTagTable</c>);
+    /// left as a raw <see cref="System.Text.Json.JsonElement"/> rather than fully modeled for the
+    /// same reason <see cref="GameSpecificData"/> is left as raw strings — it's large, and nothing
+    /// else here needs the rest of its shape structured.</summary>
+    [JsonPropertyName("net_field_export_groups")]
+    public System.Text.Json.JsonElement? NetFieldExportGroups { get; set; }
 }
 
 /// <param name="ActorNetGuid">The BombPlayerState actor's own NetGUID.</param>

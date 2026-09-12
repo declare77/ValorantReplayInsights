@@ -95,6 +95,16 @@ const AGENT_ICON_RADIUS_PX = 12;
 const FACING_LOOKAHEAD_UNITS = 220;
 const UTILITY_ICON_SIZE_PX = 28;
 
+// Shot tracers -- a deliberately stylized effect, not a physically accurate one: VALORANT's guns
+// are hitscan (no real travel time/distance to animate), and shots.json's per-shot data is itself
+// unconfirmed against a real export (see ShotFiredEvent's C# doc comment). SHOT_TRACER_LENGTH_UNITS
+// is a fixed cosmetic length, same treatment as WALL_HALF_LENGTH_UNITS above. The tracer's tip
+// animates outward from the shooter over SHOT_TRACER_TRAVEL_MS, then the whole line fades out over
+// the remainder of SHOT_TRACER_FADE_MS.
+const SHOT_TRACER_LENGTH_UNITS = 700;
+const SHOT_TRACER_TRAVEL_MS = 90;
+const SHOT_TRACER_FADE_MS = 260;
+
 // Words too generic/common across almost every ability's UI text (a HUD action verb like "FIRE",
 // or a filler word) to count as a real content match -- see resolveUtilityAbilityMatch's doc
 // comment. Extend freely, same editable-list philosophy as UtilityCategory's own keyword table
@@ -638,6 +648,8 @@ const state = {
   playerColor: new Map(),
   playerAgentImage: new Map(),
   playerByKey: new Map(),
+  playerByActorNetGuid: new Map(),   // see buildActorIndexes()
+  samplesByActorNetGuid: new Map(),  // ActorNetGuid -> movement.json Samples[], see buildActorIndexes()
   // "<agent uuid>/<ability image path>" -> Image, built lazily the first time a marker resolves
   // to that ability. See resolveUtilityIconImage().
   utilityIconCache: new Map(),
@@ -648,8 +660,10 @@ const state = {
   // --- Ticker (right-hand panel: loadout/money/KDA/abilities) -- see buildTickerIndexes() ---
   economy: [],   // raw economy.json
   combat: [],    // raw combat_interactions.json
+  shots: [],     // raw shots.json (see ShotFiredEvent's C# doc comment for confidence level)
   economyByActor: new Map(),   // ActorNetGuid -> [EconomySnapshot] sorted by TimeMs
   combatByActor: new Map(),    // ActorNetGuid -> [CombatInteraction] sorted by TimeMs
+  shotsByActor: new Map(),     // ActorNetGuid -> [ShotFiredEvent] sorted by TimeMs
   castsBySubject: new Map(),   // Subject -> [AbilityCastEvent] sorted by FirstObservedAtMs
   learnedSlotMap: new Map(),   // playerKey -> Map(rawSlot -> real ability slot name, e.g. "grenade")
   roundWinners: new Map(),     // RoundNumber -> 'attack' | 'defense' | null (unknown)
@@ -842,6 +856,10 @@ fileInput.addEventListener('change', async (e) => {
     // ticker simply show those columns as unavailable (see renderTicker()).
     state.economy = await readOptional('economy.json', []);
     state.combat = await readOptional('combat_interactions.json', []);
+    // Optional (a new, NOT-yet-confirmed-against-a-real-export output -- see ShotFiredEvent's C#
+    // doc comment) -- powers the minimap's shot-tracer animation. Missing/empty just means no
+    // tracers are drawn, same graceful-degradation as every other optional file here.
+    state.shots = await readOptional('shots.json', []);
   } catch (err) {
     loadStatus.textContent = "Couldn't read one of those files as JSON: " + err.message;
     return;
@@ -869,6 +887,7 @@ function initializeFromLoadedData() {
   btnPlayPause.textContent = '▶';
 
   assignPlayerColors();
+  buildActorIndexes();
   buildDeathMarkers();
   const hasSides = (state.match.Sides || []).length > 0;
   legendAttack.hidden = !hasSides;
@@ -903,6 +922,23 @@ function assignPlayerColors() {
     state.playerAgentImage.set(key, agentImageFor(p));
     state.playerByKey.set(key, p);
   });
+}
+
+/** ActorNetGuid -> player / movement samples, for anything (currently just the shot-tracer
+ * animation) that only has a raw ActorNetGuid to work from rather than a player object already in
+ * hand. See ShotFiredEvent's C# doc comment for why this join is a best-effort assumption (that
+ * shots.json's ActorNetGuid lines up with PlayerIdentity.ActorNetGuid the same way
+ * economy.json/combat_interactions.json's already-trusted ActorNetGuid does), not a confirmed one. */
+function buildActorIndexes() {
+  state.playerByActorNetGuid = new Map();
+  for (const p of state.match.Players || []) {
+    state.playerByActorNetGuid.set(p.ActorNetGuid, p);
+  }
+
+  state.samplesByActorNetGuid = new Map();
+  for (const track of state.tracks) {
+    if (track.Player) state.samplesByActorNetGuid.set(track.Player.ActorNetGuid, track.Samples);
+  }
 }
 
 /** Attack/defense color for a player in a given round, from match.json's `Sides` (see the C#
@@ -1438,6 +1474,13 @@ function buildTickerIndexes() {
     state.combatByActor.get(c.ActorNetGuid).push(c);
   }
   for (const arr of state.combatByActor.values()) arr.sort((a, b) => a.TimeMs - b.TimeMs);
+
+  state.shotsByActor = new Map();
+  for (const s of state.shots) {
+    if (!state.shotsByActor.has(s.ActorNetGuid)) state.shotsByActor.set(s.ActorNetGuid, []);
+    state.shotsByActor.get(s.ActorNetGuid).push(s);
+  }
+  for (const arr of state.shotsByActor.values()) arr.sort((a, b) => a.TimeMs - b.TimeMs);
 
   state.castsBySubject = new Map();
   for (const c of state.abilityCasts) {
@@ -2084,6 +2127,62 @@ function render() {
   drawAbilityCasts(w, h);
   if (state.showVision && state.visionCones) drawVisionCones(w, h);
   drawPlayers(w, h);
+  drawShots(w, h);
+}
+
+/**
+ * Animates a brief tracer for each recent shot (see ShotFiredEvent's C# doc comment for how
+ * confident to be in shots.json at all -- unlike everything else this file draws, it hasn't been
+ * checked against a real export yet). A no-op if shots.json wasn't present/empty.
+ *
+ * This is a deliberately stylized effect, not a physically simulated one: VALORANT's weapons are
+ * hitscan (no real bullet travel time/distance for this to reconstruct), so the "travel" here is
+ * just the tracer's tip animating out to a fixed cosmetic length (SHOT_TRACER_LENGTH_UNITS, same
+ * treatment as WALL_HALF_LENGTH_UNITS for ability walls) over SHOT_TRACER_TRAVEL_MS, in the
+ * direction of the shot's first recorded AttackVector -- only that vector's horizontal (X,Y)
+ * component is used, since the minimap is a 2D top-down projection.
+ */
+function drawShots(w, h) {
+  if (!state.shots || state.shots.length === 0) return;
+  const t = state.currentTimeMs;
+
+  for (const [actorNetGuid, shots] of state.shotsByActor) {
+    const samples = state.samplesByActorNetGuid.get(actorNetGuid);
+    if (!samples || samples.length === 0) continue;
+
+    // shots[] is sorted by TimeMs -- only the tail near `t` can possibly still be within the fade
+    // window, so binary-search to it rather than scanning every shot this actor ever fired.
+    const idx = findTimedIndex(shots, t);
+    for (let i = idx; i >= 0; i--) {
+      const shot = shots[i];
+      const age = t - shot.TimeMs;
+      if (age > SHOT_TRACER_FADE_MS) break; // shots[] is time-sorted -- everything earlier is older still
+      if (age < 0 || !shot.AttackVectors || shot.AttackVectors.length === 0) continue;
+
+      const vec = shot.AttackVectors[0];
+      const len = Math.hypot(vec.X, vec.Y);
+      if (len < 1e-6) continue; // no horizontal direction to draw (e.g. a straight-down vector)
+      const dirX = vec.X / len, dirY = vec.Y / len;
+
+      const sample = interpolateSample(samples, shot.TimeMs);
+      if (!sample) continue;
+
+      const travelFrac = Math.min(1, age / SHOT_TRACER_TRAVEL_MS);
+      const fadeFrac = Math.max(0, 1 - age / SHOT_TRACER_FADE_MS);
+      const tipDist = SHOT_TRACER_LENGTH_UNITS * travelFrac;
+      const tailDist = Math.max(0, tipDist - SHOT_TRACER_LENGTH_UNITS * 0.35);
+
+      const p1 = toPixel(sample.PosX + dirX * tailDist, sample.PosY + dirY * tailDist, w, h);
+      const p2 = toPixel(sample.PosX + dirX * tipDist, sample.PosY + dirY * tipDist, w, h);
+
+      ctx.strokeStyle = `rgba(255,235,150,${(fadeFrac * 0.9).toFixed(2)})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+  }
 }
 
 function drawUtility(w, h) {

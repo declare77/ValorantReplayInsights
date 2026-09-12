@@ -101,6 +101,9 @@ public static class AnalysisPipeline
         await WriteJsonAsync(Path.Combine(outputDirectory, "ultimate_usages.json"), analysis.UltimateUsages);
         await WriteJsonAsync(Path.Combine(outputDirectory, "combat_interactions.json"), analysis.CombatInteractions);
         await WriteJsonAsync(Path.Combine(outputDirectory, "economy.json"), analysis.Economy);
+        // Compact, not indented -- a full match can have thousands of shots (see ShotFiredEvent's
+        // doc comment), same reasoning as movement.json/vision_cones.json below.
+        await WriteJsonAsync(Path.Combine(outputDirectory, "shots.json"), analysis.Shots, CompactJsonOptions);
 
         if (options.WithVision)
         {
@@ -116,7 +119,7 @@ public static class AnalysisPipeline
         }
 
         onStatus?.Invoke($"Wrote analysis output to: {Path.GetFullPath(outputDirectory)}");
-        onStatus?.Invoke($"Players: {analysis.Players.Count}   Rounds: {analysis.Rounds.Count}   Utility events: {analysis.Utility.Count}   Ability casts: {analysis.AbilityCasts.Count}   Combat interactions: {analysis.CombatInteractions.Count}");
+        onStatus?.Invoke($"Players: {analysis.Players.Count}   Rounds: {analysis.Rounds.Count}   Utility events: {analysis.Utility.Count}   Ability casts: {analysis.AbilityCasts.Count}   Combat interactions: {analysis.CombatInteractions.Count}   Shots: {analysis.Shots.Count}");
 
         return analysis;
     }

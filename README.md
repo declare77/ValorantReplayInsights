@@ -132,6 +132,7 @@ already wrote, exactly like Option C does by hand.
 | `ultimate_usages.json` | Ultimate-cast signal from the server's own event timeline |
 | `combat_interactions.json` | Per-round `CombatReport` interactions (damage, hits, kill/assist, wallbang) |
 | `economy.json` | `MoneyManagementComponent` credit snapshots over time |
+| `shots.json` | Per-shot events (time, firing direction, ammo) from `ReplayPlayContinuousEffectAtLocation` RPCs — **new, and unlike every other file above, not yet confirmed against a real export** — see "The ticker" below and "Honesty about what's verified vs. assumed" |
 
 **About `movement.json`'s size.** `movement.parquet` replicates at close to the replay's own tick
 rate (observed up to roughly 128 samples/sec per player) — for a full match, writing every sample
@@ -163,6 +164,12 @@ so you can see *how* a field is encoded instead of guessing from its name. `dump
 `dump-actors` are the equivalent pair for `actors.parquet`: `dump-classes` lists the class names
 that exist, `dump-actors` shows the actual open/close/spawn-position rows for a class, so you can
 see whether an actor is reused across the match or fresh per use.
+
+A fifth one, specifically for checking `shots.json` (the newest, least-confirmed output — see
+above): `dotnet run --project src/VrfInsights.Cli -- dump-values ./export --field
+ReplayPlayContinuousEffectAtLocation --limit 5` prints the raw decoded `value_str` JSON for a
+handful of shots, so you can see the actual `{"tag":N,"value":...}` shape `ShotFiredBuilder`
+assumes (see its doc comment) instead of taking it on faith.
 
 ## 2D replay viewer
 
@@ -528,6 +535,10 @@ viewer before now; reload `viewer/index.html` and reselect the same output folde
   per vrfkit's docs), read at whatever time the scrubber is currently at.
 - **Kills/Assists** — `combat_interactions.json`, which vrfkit's own README documents as "the sole
   source of K/D/A ... reports as multiset-identical against the existing C# reference parser".
+  **A real bug here (kills always reading 0) was found and fixed via code review** — see "Honesty
+  about what's verified vs. assumed" below, "Fixed via code review, NOT yet confirmed" — but,
+  unlike the other "exact" fields on this list, it hasn't yet been checked against a real export,
+  so re-run `analyze`/`run` and confirm kills actually show up now.
 - **Deaths** — `events.json`'s `characterDeath` rows, the same signal the minimap's death markers
   already use.
 
@@ -564,6 +575,53 @@ same kind of gap `AgentCodenames.cs` used to have before a real replay's "unreco
 surfaced enough real GUIDs to fill it in. Wiring it up is left for once that evidence exists,
 rather than guessed at now.
 
+### Shot tracers (minimap)
+
+Each recent shot draws a brief animated tracer line on the minimap itself — from the shooter's
+current position, outward in the direction they fired, fading out after a fraction of a second.
+
+**This is the newest, least-confirmed thing in this project — read this before trusting it.**
+Nothing about `shots.json`/`ShotFiredEvent` has been checked against a real decoded export yet,
+unlike everything else this README calls "exact" or "learned." It was built entirely by reading
+vrfkit's own Rust/Python source (`crates/vrfkit/src/sink/rpc.rs`, `crates/vrf-decode/src/effect.rs`
+and `effect/json.rs`, `docs/DATA.md`, and vrfkit's own reference downstream converter
+`tools/to_valplay_bundle.py`) rather than against `dump-fields`/`dump-values` output the way
+`AbilityCastsThisRound`'s member names were — the same tier of confidence `AbilityCastBuilder` had
+*before* that verification, not after. Specifically:
+
+- **What it's based on:** every weapon shot fires a `ReplayPlayContinuousEffectAtLocation` RPC
+  carrying three parameter blobs (`FloatValues`, `ObjectValues`, `VectorValues`) — decoded by
+  vrfkit itself into a JSON array of `{"tag": <gameplay-tag handle>, "value": ...}` pairs per blob,
+  landing in `fields.parquet` as ordinary rows (`FieldName` exactly
+  `"ReplayPlayContinuousEffectAtLocation.FloatValues"` etc. — confirmed via source, no vrfkit
+  disambiguation suffix here unlike `AbilityCastsThisRound`). `GameplayTagTable` resolves each
+  blob's numeric tag handles to real names (`FiringState.AmmoRemaining`,
+  `FiringState.NumProjectiles`, `FiringState.AttackVector.1`..`.15`, etc.) via `manifest.json`'s
+  `net_field_export_groups` — this mapping is **replay-specific** (vrfkit's own words), so it's
+  rebuilt fresh from each replay's own manifest rather than hardcoded.
+- **Genuinely unconfirmed, in order of how much it could throw off the animation:** (1) whether
+  `ActorNetGuid` on these rows really identifies the *firing player* (this project assumes yes, by
+  analogy with how `combat_interactions.json`/`economy.json` already join on it, but it could
+  instead be a weapon/equippable actor or something else in the ownership chain — if wrong, tracers
+  would draw from the wrong player or not at all); (2) the exact JSON shape of an object/vector
+  `value` (parsed defensively — see `ShotFiredBuilder`'s doc comment — but untested); (3) whether
+  two shots from the same actor can land in the same network packet (this builder's actor+channel+
+  packet+time grouping key would then collide them into one event, silently dropping a shot).
+- **Deliberately stylized, not physically simulated, even once the data itself is confirmed:**
+  VALORANT's guns are hitscan — there's no real bullet travel time or distance in the data to
+  reconstruct — so the "travel" you see is the tracer's tip animating out to a fixed cosmetic
+  length over a fraction of a second, the same treatment this project already gives an ability
+  wall's length (no real extent in the replay either). It shows *that* and roughly *which direction*
+  a shot was fired, not a literal reconstruction of the bullet's path or where it landed.
+- **Not attempted at all:** which weapon fired (needs the same weapon-codename-resolution work the
+  loadout section above describes as not yet done) and whether the shot hit anything (that's
+  `combat_interactions.json`'s job, and the two aren't currently cross-referenced).
+
+If tracers don't appear, or point the wrong way, or come from the wrong player, that's expected
+until this gets checked against a real export — see the diagnostic command above
+(`dump-values ... --field ReplayPlayContinuousEffectAtLocation`) and `ShotFiredBuilder`'s doc
+comment for exactly what to check first.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,
@@ -572,7 +630,8 @@ rather than guessed at now.
   `game_specific_data`'s `playerLoadouts`), movement tracks, vision cones (computed — VALORANT's
   replay doesn't carry a "vision cone" field, see below), round timeline, per-round attack/defense
   sides (`Rounds/TeamSideResolver.cs` — see "Team colors" above), utility/persistent-effect
-  lifecycle, ability casts, combat interactions, economy, and best-effort map detection
+  lifecycle, ability casts, combat interactions, economy, per-shot events (`Weapons/` — see "Shot
+  tracers" above; the newest and least-confirmed piece here), and best-effort map detection
   (`Identity/MapDetector.cs` + `Identity/MapCatalog.cs`, against Riot's own map list).
 - **`VrfInsights.Pipeline`** — shells out to `vrfkit.exe` (`VrfkitExportRunner`) and runs the
   analysis (`AnalysisPipeline`); `FullPipeline` composes the two into the "one command" flow.
@@ -644,9 +703,8 @@ What's schema-verified against vrfkit's own documentation and source (`docs/USAG
   raw embedded JSON strings (one of which contains `playerLoadouts`).
 - The `Comp_AbilityStatisticsReplicator.AbilityCastsThisRound` member names (`Player`, `Slot`,
   `Round`, `RoundPhase`, `CastTime`) and the CastTime-vs-`roundStarted` timing offset.
-- The `CombatReport` flattened path shape (`Rounds[r].Reports[p].Interactions[i].<Member>`) and
-  the member names used here (`DamageDealt`, `DamageReceived`, `HitsDealt`, `HitsReceived`,
-  `DidKill`, `AssistType`, `bIsWallPen`).
+- The `CombatReport` flattened path *shape* (`Rounds[r].Reports[p].Interactions[i].<Member>`) —
+  but see the fix below regarding the member *names* under it, which were assumed, not verified.
 - `MoneyManagementComponent`'s `Money` / `StartOfRoundMoney` / `TotalMoneyGranted`.
 - The `actors.parquet` open/dormant/close lifecycle semantics (dormant ≠ despawn).
 - `events.characterDeath`'s `(word0, word1)` = `(killer, killed)`, and both are *character pawn*
@@ -667,6 +725,30 @@ builds), and `dump-values` showed `CastLocation` is one field whose value is a b
 string, not three separate fields. `AbilityCastBuilder` now matches members by name *prefix*
 (tolerating the suffix) and parses that string directly — see its own doc comment, and
 `AbilityCastBuilderTests.cs` for tests built from the real field names/values above.
+
+**Fixed via code review, NOT yet confirmed against a real export (unlike the fixes above/below,
+which were):** `CombatReportBuilder` (which produces `combat_interactions.json`, the ticker's
+kill/assist/damage/hit source) looked up `Interactions[i]`'s members by an exact name —
+`"DamageDealt"`, `"DidKill"`, `"AssistType"`, etc. — the same mistake `AbilityCastBuilder` made
+and fixed above for `AbilityCastsThisRound`'s members. Since that fix was never carried over here,
+and vrfkit's disambiguation suffix (confirmed real for `AbilityCastsThisRound`) is a
+flattened-array-wide behavior rather than something specific to one array, every one of those
+exact-name lookups was almost certainly silently missing its field on every real export — which
+would surface as **every player showing 0 kills** (deaths still worked, since those come from the
+separately-sourced `events.characterDeath`, not this report) — reported by a user as exactly that
+symptom. Fixed the same way as `AbilityCastBuilder`: suffix-tolerant prefix matching
+(`CombatReportBuilder.FindMember`). **What's still unconfirmed:** whether `DamageDealt`/
+`HitsDealt`/etc. really are flat members of `Interactions[i]` once the suffix is stripped, or
+whether some nest a level deeper (e.g. per-opponent `DealtInteractions[j]`/`ReceivedInteractions[j]`
+sub-arrays — `FlattenedArrayPivot`'s own doc comment flags this as possible for this exact
+struct); and — separate from whether `DidKill` itself now reads correctly — this report has never
+promoted *which opponent* an interaction was against, because no such field has been confirmed to
+exist yet (needed for anything that has to draw a line from shooter to target, not just count a
+kill). If kills still read as 0 after this fix, or you want opponent-level detail, run
+`dump-fields --group CombatReport` against a real export and check what `field_name` actually
+looks like under one `Interactions[i]` entry — `combat_interactions.json`'s `RawMembers` on each
+interaction already carries every member this project doesn't otherwise promote, verbatim, for
+exactly this kind of check.
 
 **Also fixed, and confirmed against a real export rather than guessed:** smoke/molly/grenade/etc.
 markers in the viewer (`utility.json`, `UtilityTimelineBuilder`) used to mostly land at the casting
@@ -765,6 +847,11 @@ What's a documented **assumption**, flagged in code comments, and worth checking
   `actors.parquet`'s `spawn_yaw`, same confidence as the rest of that table — what's an assumption
   is only how the 2D viewer *uses* it (a fixed-length line for a wall, since the replay has no
   size/extent field for it).
+- **`shots.json`/`ShotFiredEvent`/`ShotFiredBuilder`/`GameplayTagTable`** (powers the minimap's
+  shot-tracer animation) — the newest addition, and a different tier of confidence from everything
+  else on this list: it was built from reading vrfkit's own source directly, not from running
+  `dump-fields`/`dump-values` against a real export the way `AbilityCastsThisRound`'s member names
+  were confirmed below. See "Shot tracers" above for exactly what's assumed and how to check it.
 
 `VrfInsights.Pipeline` and `VrfInsights.Gui` are new and carry the same caveat as the rest of
 this project — please actually click through the GUI once (or run `vrf-insights run`) before

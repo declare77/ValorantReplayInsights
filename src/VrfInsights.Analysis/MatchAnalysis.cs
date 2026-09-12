@@ -6,6 +6,7 @@ using VrfInsights.Analysis.Movement;
 using VrfInsights.Analysis.Rounds;
 using VrfInsights.Analysis.Utility;
 using VrfInsights.Analysis.Vision;
+using VrfInsights.Analysis.Weapons;
 using VrfInsights.Data;
 
 namespace VrfInsights.Analysis;
@@ -34,6 +35,10 @@ public sealed class MatchAnalysis
     public required IReadOnlyList<UltimateUsageEvent> UltimateUsages { get; init; }
     public required IReadOnlyList<CombatInteraction> CombatInteractions { get; init; }
     public required IReadOnlyList<EconomySnapshot> Economy { get; init; }
+    /// <summary>Per-shot events (see <see cref="Weapons.ShotFiredBuilder"/>'s doc comment for how
+    /// confident to be in this — unlike most of the rest of this class, NOT yet confirmed against
+    /// a real decoded export).</summary>
+    public required IReadOnlyList<ShotFiredEvent> Shots { get; init; }
 
     public static MatchAnalysis Build(VrfExportSet export, AgentCatalog agentCatalog, VisionConeOptions? visionOptions = null) =>
         Build(export, agentCatalog, MapCatalog.LoadEmbedded(), visionOptions);
@@ -61,6 +66,7 @@ public sealed class MatchAnalysis
             UltimateUsages = UltimateUsageBuilder.Build(export.Events, rounds),
             CombatInteractions = CombatReportBuilder.Build(export.Fields),
             Economy = EconomySnapshotBuilder.Build(export.Fields),
+            Shots = ShotFiredBuilder.Build(export.Fields, GameplayTagTable.Build(export.Manifest.NetFieldExportGroups)),
         };
     }
 
