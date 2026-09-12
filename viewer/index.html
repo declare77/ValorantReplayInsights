@@ -23,7 +23,9 @@
     Select <strong>every file</strong> from one analysis output folder (the folder produced by
     <code>vrf-insights analyze</code>/<code>run</code>, or the GUI's output folder — usually the
     folder itself, not the <code>export</code> subfolder inside it). <code>match.json</code> and
-    <code>movement.json</code> are required; the rest add detail if present.
+    <code>movement.json</code> are required; the rest add detail if present —
+    <code>economy.json</code> and <code>combat_interactions.json</code> power the money/K-D-A
+    ticker panel specifically.
   </p>
   <input type="file" id="fileInput" multiple accept=".json">
   <p id="loadStatus"></p>
@@ -53,7 +55,7 @@
     </div>
   </div>
 
-  <aside id="roster"></aside>
+  <aside id="ticker"></aside>
 </main>
 
 <details id="debugPanel" hidden>
@@ -119,6 +121,7 @@
 </footer>
 
 <script src="../assets/catalog.js"></script>
+<script src="ability-meta.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

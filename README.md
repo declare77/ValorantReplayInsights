@@ -508,6 +508,54 @@ checked against your own export; the viewer's Debug info panel now includes an `
 per utility marker (which ability it resolved to and its match score, or that it fell back to a
 colored shape) specifically so you can check this yourself rather than take it on faith.
 
+### The ticker (right-hand panel)
+
+The right side of the viewer shows a live per-player panel next to the minimap: agent icon,
+current money, live K/D/A, that agent's three non-ultimate abilities with real icons, and an
+overall match score header — attacking side (red) on the left column, defending side (green) on
+the right, matching the same colors the minimap dots already use. Everything updates live as you
+move the scrubber. No re-run of the analyzer is needed to get this — `economy.json` and
+`combat_interactions.json` were already being produced by `analyze`/`run`, just not read by the
+viewer before now; reload `viewer/index.html` and reselect the same output folder's files.
+
+**What's exact, not estimated:**
+- **Money** — `economy.json`'s `Money` field, a plain scalar (`MoneyManagementComponent.Money`
+  per vrfkit's docs), read at whatever time the scrubber is currently at.
+- **Kills/Assists** — `combat_interactions.json`, which vrfkit's own README documents as "the sole
+  source of K/D/A ... reports as multiset-identical against the existing C# reference parser".
+- **Deaths** — `events.json`'s `characterDeath` rows, the same signal the minimap's death markers
+  already use.
+
+**What's a labeled best-effort estimate, not something read directly off the replay** (this was a
+deliberate scope decision — see the conversation this shipped in — rather than an oversight):
+- **Which named ability a cast belongs to.** `ability_casts.json` records a raw numeric `Slot` per
+  cast, but neither vrfkit's docs nor this project's own diagnostics confirm what that number maps
+  to for a given agent (see `AbilityCastEvent`'s doc comment). The viewer first tries to *learn*
+  the mapping from real evidence in your own replay — correlating a cast's timestamp against a
+  confidently text-matched utility placement (the same matching "Real ability icons" above already
+  does for the minimap) — and only falls back to a conventional grenade/Q/E ordering for a slot
+  number nothing could be correlated to. A dashed icon border means "estimated"; a solid border
+  means "learned from this replay's own evidence". Hover any ability icon to see which, and why.
+- **Charge/cooldown state.** Simulated from `viewer/ability-meta.js` — credit cost, max charges,
+  and any regen rule (kill-based or time-based), researched per agent against
+  valorant.fandom.com / wiki.playvalorant.com / liquipedia.net as of 2026-09 and cross-checked
+  across sources. VALORANT rebalances abilities often and a few agents' kits don't fit a simple
+  per-slot-credit-cost shape at all (Astra's Star pool, Reyna's Soul-Orb-gated Devour/Dismiss,
+  Chamber's ammo-based Headhunter, Gekko's pick-up-to-reuse creatures) — see that file's own
+  comments and `flag`/`special` fields for exactly what's simplified where.
+- **Match score.** A round's winner is read from `spikeDefused`/`spikeExploded` events where
+  present, or a full-team elimination otherwise, or "time expired with no plant" as a last-resort
+  default — a round this can't resolve any of those ways shows as unresolved and isn't counted
+  toward either team's total rather than being guessed. The two numbers track the same two rosters
+  all match (so a team's total is continuous across the halftime side-swap), even though which
+  color (red/green) each one currently sits under does swap at halftime along with the dots.
+
+**Not shown yet:** current weapon (gun) loadout. The replay data for it exists
+(`AresInventory.CurrentEquippable`), but turning a weapon's class path into a real name ("Vandal"
+vs. "Phantom") needs a codename table this project doesn't have confirmed evidence for yet — the
+same kind of gap `AgentCodenames.cs` used to have before a real replay's "unrecognized agent id"
+surfaced enough real GUIDs to fill it in. Left out of this pass rather than guessed.
+
 ## Project layout
 
 - **`VrfInsights.Data`** — reads vrfkit's Parquet tables (`fields`, `movement`, `actors`,

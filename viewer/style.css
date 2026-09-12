@@ -119,28 +119,151 @@ main {
 .legend-item .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .legend-hint { flex-basis: 100%; font-style: italic; }
 
-#roster {
-  flex: 0 0 220px;
+/* ---------------------------------------------------------------------------
+   Ticker (right-hand panel): loadout/money/K-D-A/abilities/score -- see the big doc comment
+   above renderTicker() in app.js for what this data is and isn't confirmed against the replay.
+--------------------------------------------------------------------------- */
+#ticker {
+  flex: 1 1 480px;
+  max-width: 760px;
+  min-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ticker-header {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 10px;
-  padding: 10px;
-  max-height: 640px;
-  overflow-y: auto;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.ticker-score { font-size: 28px; font-weight: 700; }
+.ticker-score-sep { color: var(--text-dim); font-size: 20px; }
+.ticker-header-unavailable {
+  font-size: 12px;
+  color: var(--text-dim);
+  justify-content: flex-start;
+  text-align: left;
 }
 
-.roster-row {
+.ticker-columns {
+  display: flex;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.ticker-team {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 720px;
+}
+
+.ticker-player {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ticker-player-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 4px;
-  border-radius: 6px;
+  min-width: 0;
 }
-.roster-row .swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+.ticker-agent-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  object-fit: cover;
   flex: 0 0 auto;
+  background: #0d1218;
+}
+.ticker-agent-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ticker-stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ticker-money { color: #7ee787; }
+.ticker-kda { color: var(--text); }
+
+.ticker-abilities {
+  display: flex;
+  gap: 5px;
+}
+.ability-icon {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  background: #1c2530;
+  border: 1px solid var(--panel-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.ability-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 3px;
+}
+.ability-icon-fallback {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+/* Charges spent (or on cooldown), per simulateCharges() -- dimmed rather than hidden, so its
+   position in the row stays stable as charges come and go. */
+.ability-icon.used {
+  opacity: 0.35;
+  filter: grayscale(70%);
+}
+/* Best-effort/estimated attribution (see the ability-slot doc comment in app.js) gets a dashed
+   border instead of the solid one, so a glance at the row tells you which icons to trust. */
+.ability-icon.estimated {
+  border-style: dashed;
+  border-color: #8b98a8;
+}
+.ability-charge-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  min-width: 12px;
+  padding: 0 2px;
+  border-radius: 5px;
+  background: rgba(11, 15, 20, 0.85);
+  color: var(--text);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 footer {
@@ -294,5 +417,7 @@ footer {
 
 @media (max-width: 760px) {
   main { flex-direction: column; }
-  #roster { flex: 1 1 auto; width: 100%; max-height: 200px; }
+  #ticker { flex: 1 1 auto; width: 100%; max-width: none; min-width: 0; }
+  .ticker-columns { flex-direction: column; }
+  .ticker-team { max-height: none; }
 }

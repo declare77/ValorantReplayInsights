@@ -644,6 +644,16 @@ const state = {
   // playerKey -> Map(roundNumber -> { TimeMs, X, Y }), built from characterDeath events. See
   // buildDeathMarkers().
   deaths: new Map(),
+
+  // --- Ticker (right-hand panel: loadout/money/KDA/abilities) -- see buildTickerIndexes() ---
+  economy: [],   // raw economy.json
+  combat: [],    // raw combat_interactions.json
+  economyByActor: new Map(),   // ActorNetGuid -> [EconomySnapshot] sorted by TimeMs
+  combatByActor: new Map(),    // ActorNetGuid -> [CombatInteraction] sorted by TimeMs
+  castsBySubject: new Map(),   // Subject -> [AbilityCastEvent] sorted by FirstObservedAtMs
+  learnedSlotMap: new Map(),   // playerKey -> Map(rawSlot -> real ability slot name, e.g. "grenade")
+  roundWinners: new Map(),     // RoundNumber -> 'attack' | 'defense' | null (unknown)
+  persistentTeams: null,       // { teamA: Set<ActorNetGuid>, teamB: Set<ActorNetGuid> } | null
 };
 
 // ---------------------------------------------------------------------------
@@ -701,9 +711,16 @@ function formatClock(ms) {
 
 function findRoundAt(rounds, timeMs) {
   for (const r of rounds) {
-    if (timeMs >= r.StartTimeMs && (r.EndTimeMs == null || timeMs < r.EndTimeMs)) return r;
+    if (roundContains(r, timeMs)) return r;
   }
   return null;
+}
+
+/** Whether timeMs falls within round's [StartTimeMs, EndTimeMs) window -- rounds here are plain
+ * JSON objects (from match.json), not instances of the C# RoundInfo record, so this replicates
+ * RoundInfo.Contains() rather than calling a method that doesn't exist on them. */
+function roundContains(round, timeMs) {
+  return timeMs >= round.StartTimeMs && (round.EndTimeMs == null || timeMs < round.EndTimeMs);
 }
 
 /** Index of the last entry with TimeMs <= t, via binary search. -1 if t is before every entry. */
@@ -760,7 +777,6 @@ const ctx = canvas.getContext('2d');
 const mapOverlay = document.getElementById('mapOverlayMessage');
 const mapPicker = document.getElementById('mapPicker');
 const mapSelect = document.getElementById('mapSelect');
-const roster = document.getElementById('roster');
 const legendAttack = document.getElementById('legendAttack');
 const legendDefend = document.getElementById('legendDefend');
 
@@ -822,6 +838,10 @@ fileInput.addEventListener('change', async (e) => {
     // Optional (older output folders may predate this file) -- only used to find each player's
     // death time/location per round so drawPlayers() can show a death marker instead of a live icon.
     state.events = await readOptional('events.json', []);
+    // Optional -- power the ticker panel's money and K/D/A. Older output folders that predate the
+    // ticker simply show those columns as unavailable (see renderTicker()).
+    state.economy = await readOptional('economy.json', []);
+    state.combat = await readOptional('combat_interactions.json', []);
   } catch (err) {
     loadStatus.textContent = "Couldn't read one of those files as JSON: " + err.message;
     return;
@@ -854,8 +874,8 @@ function initializeFromLoadedData() {
   legendAttack.hidden = !hasSides;
   legendDefend.hidden = !hasSides;
   resolveMap();
-  buildRoster();
-  lastRosterRound = findRoundAt(state.match.Rounds || [], state.currentTimeMs)?.RoundNumber ?? null;
+  buildTickerIndexes();
+  renderTicker();
   buildChapters();
   logSpawnDebugInfo();
 
@@ -1376,22 +1396,522 @@ btnCopyDebug.addEventListener('click', async () => {
 // Roster / chapters
 // ---------------------------------------------------------------------------
 
-function buildRoster() {
-  roster.innerHTML = '';
+// ---------------------------------------------------------------------------
+// Ticker (right-hand panel): agent, loadout, money, live K/D/A, ability availability, score.
+//
+// Money and K/D/A come straight from economy.json / combat_interactions.json -- both are exact,
+// per vrfkit's own README ("the sole source of K/D/A ... reports as multiset-identical against
+// the existing C# reference parser" for combat, and a plain scalar field for money).
+//
+// Ability availability and the match score are NOT that solid, and are clearly labeled as such in
+// the UI (see the "(est.)" markers and the ticker's own title/legend text) rather than presented
+// with false confidence:
+//  - Which named ability a raw ability-cast "Slot" number refers to is not confirmed by vrfkit's
+//    docs or by this project's own diagnostics (see AbilityCastEvent's doc comment). Where a cast
+//    can be correlated with a confidently-matched utility placement (smoke/wall/molly/etc, via the
+//    same text-matching resolveUtilityAbilityMatch() already uses for the minimap icons), the
+//    mapping is learned from real evidence in THIS replay. Anything left over falls back to a
+//    conventional grenade/Q/E ordering, which may be wrong for a given agent -- see
+//    buildLearnedAbilitySlots()/resolveSlotAssignments().
+//  - Charge/cooldown state is a simulation from AGENT_ABILITY_META's researched game-design rules
+//    (see ability-meta.js), not something read from the replay -- see simulateCharges().
+//  - The match score is derived from spike-outcome events plus full-team-elimination, which covers
+//    the common cases but leaves a genuinely ambiguous round's winner as "?" rather than guessing
+//    -- see resolveRoundWinnerSide().
+// ---------------------------------------------------------------------------
+
+const ticker = document.getElementById('ticker');
+
+/** Builds every per-actor/per-subject index the ticker needs. Called once per loaded replay
+ * (not per frame) -- renderTicker() below does the cheap per-tick lookups against these. */
+function buildTickerIndexes() {
+  state.economyByActor = new Map();
+  for (const e of state.economy) {
+    if (!state.economyByActor.has(e.ActorNetGuid)) state.economyByActor.set(e.ActorNetGuid, []);
+    state.economyByActor.get(e.ActorNetGuid).push(e);
+  }
+  for (const arr of state.economyByActor.values()) arr.sort((a, b) => a.TimeMs - b.TimeMs);
+
+  state.combatByActor = new Map();
+  for (const c of state.combat) {
+    if (!state.combatByActor.has(c.ActorNetGuid)) state.combatByActor.set(c.ActorNetGuid, []);
+    state.combatByActor.get(c.ActorNetGuid).push(c);
+  }
+  for (const arr of state.combatByActor.values()) arr.sort((a, b) => a.TimeMs - b.TimeMs);
+
+  state.castsBySubject = new Map();
+  for (const c of state.abilityCasts) {
+    if (!c.Subject) continue;
+    if (!state.castsBySubject.has(c.Subject)) state.castsBySubject.set(c.Subject, []);
+    state.castsBySubject.get(c.Subject).push(c);
+  }
+  for (const arr of state.castsBySubject.values()) arr.sort((a, b) => a.FirstObservedAtMs - b.FirstObservedAtMs);
+
+  buildLearnedAbilitySlots();
+  buildRoundWinners();
+  buildPersistentTeams();
+}
+
+/** Latest value of a {TimeMs}-sorted array's item at/before t, or null before the first entry. */
+function latestAt(sortedArr, t) {
+  const i = findTimedIndex(sortedArr, t);
+  return i >= 0 ? sortedArr[i] : null;
+}
+
+function moneyForPlayerAt(player, t) {
+  const arr = state.economyByActor.get(player.ActorNetGuid);
+  if (!arr || arr.length === 0) return null;
+  const snap = latestAt(arr, t);
+  return snap ? snap.Money : null;
+}
+
+function kdaForPlayerAt(player, t) {
+  let kills = 0, assists = 0;
+  const combat = state.combatByActor.get(player.ActorNetGuid) || [];
+  for (const c of combat) {
+    if (c.TimeMs > t) break;
+    if (c.DidKill) kills++;
+    // AssistType's exact enum values aren't independently confirmed here -- any non-null,
+    // non-zero value is treated as "this interaction was an assist for this player", matching
+    // the field's evident purpose (see CombatInteraction's doc comment).
+    if (c.AssistType != null && c.AssistType !== 0) assists++;
+  }
+
+  let deaths = 0;
+  const roundDeaths = state.deaths.get(playerKey(player));
+  if (roundDeaths) {
+    for (const d of roundDeaths.values()) {
+      if (d.TimeMs <= t) deaths++;
+    }
+  }
+
+  return { kills, deaths, assists };
+}
+
+/** Every kill TimeMs by this player within the given round, up to (and including) t -- used by
+ * simulateCharges() for kill-based ability regen (e.g. Phoenix's Hot Hands). */
+function killTimesInRound(player, round, t) {
+  const combat = state.combatByActor.get(player.ActorNetGuid) || [];
+  const times = [];
+  for (const c of combat) {
+    if (c.TimeMs > t) break;
+    if (c.DidKill && roundContains(round, c.TimeMs)) times.push(c.TimeMs);
+  }
+  return times;
+}
+
+// ---------------------------------------------------------------------------
+// Ability slot attribution -- see the big doc comment above this section.
+// ---------------------------------------------------------------------------
+
+/** playerKey -> Map(rawSlot -> real ability slot name e.g. "grenade"/"ability1"/"ability2"),
+ * learned by correlating an ability cast's timestamp with a confidently-matched utility
+ * placement (resolveUtilityAbilityMatch) close in time, for the SAME agent. Only agents that
+ * appear exactly once are attributed directly; when two players share an agent (one per team),
+ * the nearer player (by recorded position at the effect's spawn time) is credited. */
+function buildLearnedAbilitySlots() {
+  state.learnedSlotMap = new Map();
+  const players = state.match.Players || [];
+  const byAgent = new Map();
+  for (const p of players) {
+    if (!p.AgentName) continue;
+    if (!byAgent.has(p.AgentName)) byAgent.set(p.AgentName, []);
+    byAgent.get(p.AgentName).push(p);
+  }
+  const trackByKey = new Map();
+  for (const track of state.tracks) {
+    if (track.Player) trackByKey.set(playerKey(track.Player), track.Samples);
+  }
+
+  // playerKey -> rawSlot -> { [abilitySlotName]: voteCount }
+  const votes = new Map();
+
+  for (const u of state.utility) {
+    if (!u.AgentRealName || u.SpawnTimeMs == null) continue;
+    const candidates = byAgent.get(u.AgentRealName);
+    if (!candidates || candidates.length === 0) continue;
+
+    let castPlayer = candidates[0];
+    if (candidates.length > 1) {
+      let best = null, bestDist = Infinity;
+      for (const p of candidates) {
+        const samples = trackByKey.get(playerKey(p));
+        const sample = samples && interpolateSample(samples, u.SpawnTimeMs);
+        if (!sample || u.X == null || u.Y == null) continue;
+        const d = Math.hypot(sample.PosX - u.X, sample.PosY - u.Y);
+        if (d < bestDist) { bestDist = d; best = p; }
+      }
+      if (!best) continue; // couldn't disambiguate which of the two players cast this -- skip
+      castPlayer = best;
+    }
+
+    const match = resolveUtilityAbilityMatch(u);
+    if (!match) continue; // only a confident text match teaches us anything
+
+    const casts = state.castsBySubject.get(castPlayer.Subject) || [];
+    let bestCast = null, bestDelta = Infinity;
+    for (const c of casts) {
+      if (c.Slot == null || c.FirstObservedAtMs == null) continue;
+      const delta = Math.abs(c.FirstObservedAtMs - u.SpawnTimeMs);
+      if (delta < bestDelta && delta <= 4000) { bestDelta = delta; bestCast = c; }
+    }
+    if (!bestCast) continue;
+
+    const key = playerKey(castPlayer);
+    if (!votes.has(key)) votes.set(key, new Map());
+    const perPlayer = votes.get(key);
+    if (!perPlayer.has(bestCast.Slot)) perPlayer.set(bestCast.Slot, {});
+    const tally = perPlayer.get(bestCast.Slot);
+    // catalog.js's `slot` is valorant-api's own raw value (e.g. "Grenade", "Ability1") --
+    // Fetch-Assets.ps1 only lowercases it for the icon FILE name, not the stored field (see its
+    // comment) -- so this must lowercase it too to line up with AGENT_ABILITY_META's keys.
+    const abilitySlotName = (match.ability.slot || '').toLowerCase();
+    tally[abilitySlotName] = (tally[abilitySlotName] || 0) + 1;
+  }
+
+  for (const [key, perPlayer] of votes) {
+    const resolved = new Map();
+    for (const [slot, tally] of perPlayer) {
+      let bestName = null, bestCount = 0, total = 0;
+      for (const name of Object.keys(tally)) {
+        total += tally[name];
+        if (tally[name] > bestCount) { bestCount = tally[name]; bestName = name; }
+      }
+      // Require a clear (>=60%) majority of the evidence for this slot before trusting it.
+      if (bestName && total > 0 && bestCount / total >= 0.6) resolved.set(slot, bestName);
+    }
+    state.learnedSlotMap.set(key, resolved);
+  }
+}
+
+/** rawSlot -> { name: 'grenade'|'ability1'|'ability2', confidence: 'confirmed'|'estimated' } for
+ * one player, combining learned evidence with a conventional grenade/Q/E fallback ordering for
+ * any slot number evidence didn't resolve. */
+function resolveSlotAssignments(player) {
+  const learned = state.learnedSlotMap.get(playerKey(player)) || new Map();
+  const casts = state.castsBySubject.get(player.Subject) || [];
+  const distinctSlots = [...new Set(casts.map((c) => c.Slot).filter((s) => s != null))].sort((a, b) => a - b);
+
+  const assignment = new Map();
+  const usedNames = new Set();
+  for (const slot of distinctSlots) {
+    const name = learned.get(slot);
+    if (name && !usedNames.has(name)) {
+      assignment.set(slot, { name, confidence: 'confirmed' });
+      usedNames.add(name);
+    }
+  }
+  const fallbackOrder = ['grenade', 'ability1', 'ability2'].filter((n) => !usedNames.has(n));
+  const remainingSlots = distinctSlots.filter((s) => !assignment.has(s));
+  remainingSlots.forEach((slot, i) => {
+    if (i < fallbackOrder.length) assignment.set(slot, { name: fallbackOrder[i], confidence: 'estimated' });
+  });
+  return assignment;
+}
+
+/** Simulates remaining charges for one non-ultimate ability at time t, from AGENT_ABILITY_META's
+ * researched charge count + regen rule and this round's actual casts (see the big doc comment
+ * above this section for what this is and isn't -- a rules-based simulation, not a replay read). */
+function simulateCharges(meta, castsThisRoundAsc, t, killTimesAsc) {
+  const maxCharges = meta.charges || 1;
+  const events = [];
+  for (const c of castsThisRoundAsc) {
+    if (c.FirstObservedAtMs <= t) events.push({ tMs: c.FirstObservedAtMs, type: 'cast' });
+  }
+  if (meta.regen && meta.regen.kills) {
+    for (const kt of killTimesAsc) events.push({ tMs: kt, type: 'kill' });
+  }
+  events.sort((a, b) => a.tMs - b.tMs);
+
+  let charges = maxCharges;
+  let killsSinceRegenPoint = 0;
+  let lastCastMs = null;
+  for (const e of events) {
+    if (e.type === 'cast') {
+      charges = Math.max(0, charges - 1);
+      killsSinceRegenPoint = 0;
+      lastCastMs = e.tMs;
+    } else {
+      killsSinceRegenPoint++;
+      if (meta.regen.kills && killsSinceRegenPoint >= meta.regen.kills && charges < maxCharges) {
+        charges = Math.min(maxCharges, charges + 1);
+        killsSinceRegenPoint = 0;
+      }
+    }
+  }
+
+  // Time-based mid-round regen: every researched ability with this rule only ever grants back a
+  // single charge this way, so this only ever adds one -- not a repeating timer.
+  if (meta.regen && meta.regen.seconds && charges < maxCharges && lastCastMs != null) {
+    if (t - lastCastMs >= meta.regen.seconds * 1000) charges = Math.min(maxCharges, charges + 1);
+  }
+
+  return { current: charges, max: maxCharges };
+}
+
+/** The three non-ultimate ability "cards" for one player at time t: name, icon, real/estimated
+ * confidence, and simulated charge state -- or null entries where the agent isn't in
+ * AGENT_ABILITY_META yet or has no confirmed catalog abilities to draw from. */
+function abilityCardsForPlayerAt(player, round, t) {
+  const catalogAgent = resolveUtilityAgentCatalogEntry(player.AgentName);
+  const meta = AGENT_ABILITY_META[player.AgentName];
+  if (!catalogAgent || !meta) return [];
+
+  const assignment = resolveSlotAssignments(player);
+  const bySlotName = new Map(); // 'grenade'/'ability1'/'ability2' -> rawSlot
+  for (const [rawSlot, info] of assignment) bySlotName.set(info.name, { rawSlot, confidence: info.confidence });
+
+  const casts = state.castsBySubject.get(player.Subject) || [];
+  const killTimes = round ? killTimesInRound(player, round, t) : [];
+
+  const order = ['grenade', 'ability1', 'ability2'];
+  const cards = [];
+  for (const slotName of order) {
+    const abilityMeta = meta[slotName];
+    if (!abilityMeta) continue;
+    // See the lowercasing note above buildLearnedAbilitySlots's `tally` assignment.
+    const catalogAbility = (catalogAgent.abilities || []).find((a) => (a.slot || '').toLowerCase() === slotName);
+
+    const resolved = bySlotName.get(slotName);
+    let charges = { current: abilityMeta.charges || 1, max: abilityMeta.charges || 1 };
+    let confidence = 'unattributed'; // no cast has ever been linked to this ability's slot at all
+    if (resolved != null && round) {
+      confidence = resolved.confidence;
+      const castsThisRound = casts.filter((c) => c.Slot === resolved.rawSlot && roundContains(round, c.FirstObservedAtMs));
+      charges = simulateCharges(abilityMeta, castsThisRound, t, killTimes);
+    }
+
+    cards.push({
+      slotName,
+      displayName: abilityMeta.name,
+      icon: catalogAbility ? '../assets/' + catalogAbility.image : null,
+      free: !!abilityMeta.free,
+      cost: abilityMeta.cost || 0,
+      charges,
+      confidence, // 'confirmed' | 'estimated' | 'unattributed'
+      flag: abilityMeta.flag || null,
+    });
+  }
+  return cards;
+}
+
+// ---------------------------------------------------------------------------
+// Match score -- see the big doc comment above this section for what this is and isn't.
+// ---------------------------------------------------------------------------
+
+function buildPersistentTeams() {
+  state.persistentTeams = null;
+  const sides = state.match.Sides || [];
+  if (sides.length === 0) return;
+  const baseline = sides[0];
+  state.persistentTeams = {
+    teamA: new Set(baseline.AttackingActorNetGuids || []),
+    teamB: new Set(baseline.DefendingActorNetGuids || []),
+  };
+}
+
+/** 'attack' | 'defense' | null (genuinely unresolved -- not counted toward the score) for one
+ * round, from spike-outcome events (if vrfkit decoded them into events.json under these exact
+ * Group names) and, failing that, whether one whole side was eliminated. A round that was planted
+ * but never resolves to a defuse/explosion/elimination signal here is left null on purpose rather
+ * than guessed at (e.g. "time expired with the bomb still live" isn't something this project has
+ * a confirmed signal for). */
+function resolveRoundWinnerSide(round) {
+  const roundEvents = state.events.filter((e) => roundContains(round, e.TimeMs));
+  if (roundEvents.some((e) => e.Group === 'spikeDefused')) return 'defense';
+  if (roundEvents.some((e) => e.Group === 'spikeExploded')) return 'attack';
+
+  const sides = (state.match.Sides || []).find((s) => s.RoundNumber === round.RoundNumber);
+  if (sides) {
+    const deaths = state.deaths;
+    const diedInRound = (actorGuid) => {
+      const p = (state.match.Players || []).find((pl) => pl.ActorNetGuid === actorGuid);
+      if (!p) return false;
+      const d = deaths.get(playerKey(p))?.get(round.RoundNumber);
+      return !!d;
+    };
+    const attackers = sides.AttackingActorNetGuids || [];
+    const defenders = sides.DefendingActorNetGuids || [];
+    if (attackers.length > 0 && attackers.every(diedInRound)) return 'defense';
+    if (defenders.length > 0 && defenders.every(diedInRound)) return 'attack';
+  }
+
+  const planted = roundEvents.some((e) => e.Group === 'spikePlanted');
+  if (!planted) return 'defense'; // time expired with no plant -- defense wins by default
+
+  return null; // planted, but no defuse/explosion/elimination signal found -- genuinely unknown
+}
+
+function buildRoundWinners() {
+  state.roundWinners = new Map();
+  for (const round of state.match.Rounds || []) {
+    state.roundWinners.set(round.RoundNumber, resolveRoundWinnerSide(round));
+  }
+}
+
+/** { teamAWins, teamBWins } counting every round that has already ENDED at or before t (a round
+ * still in progress has no winner yet). Rounds this project couldn't resolve a winner for (see
+ * resolveRoundWinnerSide) simply aren't counted either way, so teamAWins+teamBWins can be less
+ * than the number of completed rounds -- that's the honest reflection of what's known. */
+function scoreAt(t) {
+  const result = { teamAWins: 0, teamBWins: 0, unresolvedCount: 0 };
+  if (!state.persistentTeams) return result;
+  for (const round of state.match.Rounds || []) {
+    if (round.EndTimeMs == null || round.EndTimeMs > t) continue; // not finished yet
+    const winnerSide = state.roundWinners.get(round.RoundNumber);
+    if (winnerSide == null) { result.unresolvedCount++; continue; }
+    const sides = (state.match.Sides || []).find((s) => s.RoundNumber === round.RoundNumber);
+    if (!sides) { result.unresolvedCount++; continue; }
+    const winningGuids = winnerSide === 'attack' ? sides.AttackingActorNetGuids : sides.DefendingActorNetGuids;
+    const firstGuid = (winningGuids || [])[0];
+    if (firstGuid == null) { result.unresolvedCount++; continue; }
+    if (state.persistentTeams.teamA.has(firstGuid)) result.teamAWins++;
+    else result.teamBWins++;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+function formatMoney(v) {
+  return v == null ? '—' : '$' + v.toLocaleString('en-US');
+}
+
+function buildAbilityIconEl(card) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ability-icon';
+  if (card.charges.max > 0 && card.charges.current <= 0) wrap.classList.add('used');
+  if (card.confidence !== 'confirmed') wrap.classList.add('estimated');
+
+  if (card.icon) {
+    const img = document.createElement('img');
+    img.src = card.icon;
+    img.alt = card.displayName;
+    wrap.appendChild(img);
+  } else {
+    const fallback = document.createElement('span');
+    fallback.className = 'ability-icon-fallback';
+    fallback.textContent = card.displayName.slice(0, 1);
+    wrap.appendChild(fallback);
+  }
+
+  if (card.charges.max > 1) {
+    const badge = document.createElement('span');
+    badge.className = 'ability-charge-badge';
+    badge.textContent = String(card.charges.current);
+    wrap.appendChild(badge);
+  }
+
+  const confidenceNote = card.confidence === 'confirmed'
+    ? 'attribution: learned from a matching effect in this replay'
+    : card.confidence === 'estimated'
+      ? 'attribution: ESTIMATED (conventional slot order -- not confirmed against this replay)'
+      : 'attribution: no cast has been linked to this ability yet this match';
+  wrap.title = card.displayName + ' — ' + card.charges.current + '/' + card.charges.max + ' charges' +
+    (card.free ? '' : ' — ' + card.cost + 'cr') + '\n' + confidenceNote +
+    (card.flag ? '\nNote: ' + card.flag : '');
+
+  return wrap;
+}
+
+function buildPlayerCardEl(player, round, t, sideColor) {
+  const card = document.createElement('div');
+  card.className = 'ticker-player';
+  card.style.borderColor = sideColor;
+
+  const head = document.createElement('div');
+  head.className = 'ticker-player-head';
+  const img = state.playerAgentImage.get(playerKey(player));
+  if (img) {
+    const iconEl = document.createElement('img');
+    iconEl.className = 'ticker-agent-icon';
+    iconEl.src = img.src;
+    iconEl.alt = player.AgentName || '';
+    head.appendChild(iconEl);
+  }
+  const name = document.createElement('span');
+  name.className = 'ticker-agent-name';
+  name.textContent = player.AgentName || '(unknown agent)';
+  head.appendChild(name);
+  card.appendChild(head);
+
+  const stats = document.createElement('div');
+  stats.className = 'ticker-stat-row';
+  const money = document.createElement('span');
+  money.className = 'ticker-money';
+  money.textContent = formatMoney(moneyForPlayerAt(player, t));
+  const kda = kdaForPlayerAt(player, t);
+  const kdaEl = document.createElement('span');
+  kdaEl.className = 'ticker-kda';
+  kdaEl.textContent = kda.kills + ' / ' + kda.deaths + ' / ' + kda.assists;
+  kdaEl.title = 'Kills / Deaths / Assists (this match, up to the current playhead)';
+  stats.appendChild(money);
+  stats.appendChild(kdaEl);
+  card.appendChild(stats);
+
+  const abilities = document.createElement('div');
+  abilities.className = 'ticker-abilities';
+  for (const abilityCard of abilityCardsForPlayerAt(player, round, t)) {
+    abilities.appendChild(buildAbilityIconEl(abilityCard));
+  }
+  card.appendChild(abilities);
+
+  return card;
+}
+
+function renderTicker() {
+  if (!ticker || !state.match) return;
+  ticker.innerHTML = '';
+
   const round = findRoundAt(state.match.Rounds || [], state.currentTimeMs);
   const roundNumber = round ? round.RoundNumber : null;
-  (state.match.Players || []).forEach((p) => {
-    const row = document.createElement('div');
-    row.className = 'roster-row';
-    const swatch = document.createElement('span');
-    swatch.className = 'swatch';
-    swatch.style.background = colorForPlayer(p, roundNumber);
-    const label = document.createElement('span');
-    label.textContent = p.AgentName || '(unknown agent)';
-    row.appendChild(swatch);
-    row.appendChild(label);
-    roster.appendChild(row);
+  const sides = roundNumber != null ? (state.match.Sides || []).find((s) => s.RoundNumber === roundNumber) : null;
+
+  const header = document.createElement('div');
+  header.className = 'ticker-header';
+  if (sides && state.persistentTeams) {
+    const score = scoreAt(state.currentTimeMs);
+    const attackIsTeamA = (sides.AttackingActorNetGuids || []).some((g) => state.persistentTeams.teamA.has(g));
+    const attackWins = attackIsTeamA ? score.teamAWins : score.teamBWins;
+    const defendWins = attackIsTeamA ? score.teamBWins : score.teamAWins;
+    header.innerHTML =
+      '<span class="ticker-score" style="color:' + TEAM_COLOR_ATTACK + '">' + attackWins + '</span>' +
+      '<span class="ticker-score-sep">–</span>' +
+      '<span class="ticker-score" style="color:' + TEAM_COLOR_DEFEND + '">' + defendWins + '</span>';
+    header.title = 'Rounds won so far (estimated from spike-outcome events and full-team eliminations)' +
+      (score.unresolvedCount > 0 ? '; ' + score.unresolvedCount + ' round(s) could not be resolved and are not counted' : '');
+  } else {
+    header.textContent = 'Score unavailable (side/round data not resolved for this replay)';
+    header.classList.add('ticker-header-unavailable');
+  }
+  ticker.appendChild(header);
+
+  const columns = document.createElement('div');
+  columns.className = 'ticker-columns';
+  const attackCol = document.createElement('div');
+  attackCol.className = 'ticker-team';
+  const defendCol = document.createElement('div');
+  defendCol.className = 'ticker-team';
+
+  const players = state.match.Players || [];
+  players.forEach((p, idx) => {
+    const isAttack = sides && (sides.AttackingActorNetGuids || []).includes(p.ActorNetGuid);
+    const isDefend = sides && (sides.DefendingActorNetGuids || []).includes(p.ActorNetGuid);
+    const sideColor = isAttack ? TEAM_COLOR_ATTACK : isDefend ? TEAM_COLOR_DEFEND : colorForPlayer(p, roundNumber);
+    const cardEl = buildPlayerCardEl(p, round, state.currentTimeMs, sideColor);
+    // When this round's side isn't resolved at all (sides is null -- see TeamSideResolver's
+    // honesty-first "skip rather than guess" behavior), still split into two columns by seat
+    // order rather than dumping every player into one -- purely a layout fallback, not a claim
+    // about which side anyone is actually on.
+    const goesInDefendCol = sides ? isDefend : idx % 2 === 1;
+    (goesInDefendCol ? defendCol : attackCol).appendChild(cardEl);
   });
+
+  columns.appendChild(attackCol);
+  columns.appendChild(defendCol);
+  ticker.appendChild(columns);
 }
 
 function buildChapters() {
@@ -1433,8 +1953,6 @@ function buildChapters() {
 // ---------------------------------------------------------------------------
 // Transport controls
 // ---------------------------------------------------------------------------
-
-let lastRosterRound; // see updateTimeUi() below
 
 scrubber.addEventListener('input', () => {
   state.currentTimeMs = Number(scrubber.value);
@@ -1507,13 +2025,7 @@ function updateTimeUi() {
     btn.classList.toggle('active', isFreezeSegment === stillInFreezeTime);
   });
 
-  // Roster swatches show attack/defense color, which can flip between rounds (halftime) --
-  // rebuild them only when the round actually changed, not on every scrub/frame tick.
-  const roundNumber = round ? round.RoundNumber : null;
-  if (roundNumber !== lastRosterRound) {
-    lastRosterRound = roundNumber;
-    buildRoster();
-  }
+  renderTicker();
 }
 
 // ---------------------------------------------------------------------------
