@@ -19,6 +19,15 @@
                                                         ability2, grenade, ultimate, passive --
                                                         NOT this project's internal codename/slot
                                                         tokens, which don't reliably map to these)
+      assets/weapons/<weapon-uuid>.png                - each weapon's icon (real name/cost/uuid,
+                                                        all straight from valorant-api.com -- see
+                                                        "Honesty about what's verified vs.
+                                                        assumed": the viewer does NOT yet show a
+                                                        player's actual equipped weapon anywhere,
+                                                        since that needs a class-path-to-weapon
+                                                        codename table this project doesn't have
+                                                        confirmed evidence for; this just fetches
+                                                        the real reference data/art ahead of that)
       assets/catalog.json             - combined metadata, for reference/debugging
       assets/catalog.js               - the same data as a plain `window.VRF_CATALOG = {...}`
                                          script — viewer/index.html loads this file directly
@@ -69,9 +78,11 @@ $assetsRoot = Join-Path $projectRoot 'assets'
 $mapsDir = Join-Path $assetsRoot 'maps'
 $agentsDir = Join-Path $assetsRoot 'agents'
 $abilitiesDir = Join-Path $assetsRoot 'abilities'
+$weaponsDir = Join-Path $assetsRoot 'weapons'
 New-Item -ItemType Directory -Force -Path $mapsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $abilitiesDir | Out-Null
+New-Item -ItemType Directory -Force -Path $weaponsDir | Out-Null
 
 $failures = New-Object System.Collections.Generic.List[string]
 
@@ -228,11 +239,39 @@ foreach ($agent in $allAgents) {
     }
 }
 
+Write-Host ""
+Write-Host "=== Weapons ==="
+# valorant-api.com's own bulk /v1/weapons response already returns only the ~18-19 real base
+# weapons (Classic through Odin, plus Melee) as top-level data[] entries -- unlike agents there's
+# no isPlayableCharacter-style flag needed, since skins live nested under each weapon's own
+# `skins[]` array (which this deliberately never reads: it's dozens of cosmetic variants per gun,
+# irrelevant here and large enough that a naive tool reading the whole response back at once can
+# choke on it -- Invoke-RestMethod handles it fine either way).
+$allWeapons = Get-RemoteJson -Url 'https://valorant-api.com/v1/weapons?language=en-US'
+
+$weaponCatalog = @()
+foreach ($weapon in $allWeapons) {
+    if (-not $weapon.displayIcon) { continue }
+    $dest = Join-Path $weaponsDir "$($weapon.uuid).png"
+    $ok = Save-Image -Url $weapon.displayIcon -DestinationPath $dest -Label "weapon: $($weapon.displayName)"
+    $weaponCatalog += [ordered]@{
+        uuid           = $weapon.uuid
+        displayName    = $weapon.displayName
+        # e.g. "EEquippableCategory::Rifle" -> "Rifle" -- valorant-api's own enum-style prefix,
+        # stripped for a plain readable label; the full raw string isn't needed for anything here.
+        category       = ($weapon.category -replace '^EEquippableCategory::', '')
+        cost           = if ($weapon.shopData) { $weapon.shopData.cost } else { $null }
+        image          = "weapons/$($weapon.uuid).png"
+        imageAvailable = $ok
+    }
+}
+
 $catalog = [ordered]@{
     fetchedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
     source       = 'https://valorant-api.com'
     maps         = $mapCatalog
     agents       = $agentCatalog
+    weapons      = $weaponCatalog
 }
 
 $catalogJson = $catalog | ConvertTo-Json -Depth 6
@@ -252,7 +291,7 @@ Write-Host "Wrote $catalogJsonPath"
 Write-Host "Wrote $catalogJsPath"
 $abilityIconCount = ($agentCatalog | ForEach-Object { $_.abilities.Count } | Measure-Object -Sum).Sum
 $maskedMapCount = ($mapCatalog | Where-Object { $_.alphaMaskSize -gt 0 } | Measure-Object).Count
-Write-Host "Maps downloaded: $($mapCatalog.Count)   Agents downloaded: $($agentCatalog.Count)   Ability icons downloaded: $abilityIconCount"
+Write-Host "Maps downloaded: $($mapCatalog.Count)   Agents downloaded: $($agentCatalog.Count)   Ability icons downloaded: $abilityIconCount   Weapons downloaded: $($weaponCatalog.Count)"
 Write-Host "Maps with an alpha mask for automatic orientation calibration: $maskedMapCount / $($mapCatalog.Count)"
 if ($maskedMapCount -lt $mapCatalog.Count) {
     Write-Warning "Some maps are missing an alpha mask (see [mask]/[fail] lines above) -- the viewer's automatic orientation calibration will fall back to its in-browser method for those, which most browsers block for a page opened as a plain file. The manual Map orientation controls always work regardless."

@@ -199,13 +199,18 @@ sometimes also flags the extracted files as "from the internet" and blocks them 
 way — if the above doesn't fix it, right-click the `.ps1` file → **Properties** → **Unblock** (or
 run `Unblock-File .\scripts\Fetch-Assets.ps1`), then try again.
 
-This downloads every competitive map's minimap image and every agent's icon from Riot's own
-public content API into `assets/maps/`, `assets/agents/`, plus `assets/catalog.json` /
-`assets/catalog.js` (metadata the viewer reads — see the script's own comments for why there are
-two copies). Safe to re-run any time; already-downloaded files are skipped. If you'd rather not
-run a script against a third-party API yourself, tell me and I'll take the images as an upload
-instead — either way, nothing about the vrfkit/decoding side of this project is affected, this is
-purely artwork.
+This downloads every competitive map's minimap image, every agent's icon, and every weapon's real
+name/icon/shop cost from Riot's own public content API into `assets/maps/`, `assets/agents/`,
+`assets/weapons/`, plus `assets/catalog.json` / `assets/catalog.js` (metadata the viewer reads —
+see the script's own comments for why there are two copies). Safe to re-run any time;
+already-downloaded files are skipped. If you'd rather not run a script against a third-party API
+yourself, tell me and I'll take the images as an upload instead — either way, nothing about the
+vrfkit/decoding side of this project is affected, this is purely artwork.
+
+The weapon catalog (`assets/weapons/`, and `catalog.weapons` in `catalog.js`) is fetched ahead of
+actually being used anywhere in the viewer yet — see the ticker section below for why a player's
+currently-equipped weapon isn't shown yet even though the real names/icons/costs are now sitting
+right there in the catalog.
 
 **Using it:** open `viewer/index.html` in a browser, select every file from one `analyze`/`run`
 output folder in the file picker (`match.json` and `movement.json` are required, the rest add
@@ -550,11 +555,14 @@ deliberate scope decision — see the conversation this shipped in — rather th
   all match (so a team's total is continuous across the halftime side-swap), even though which
   color (red/green) each one currently sits under does swap at halftime along with the dots.
 
-**Not shown yet:** current weapon (gun) loadout. The replay data for it exists
-(`AresInventory.CurrentEquippable`), but turning a weapon's class path into a real name ("Vandal"
-vs. "Phantom") needs a codename table this project doesn't have confirmed evidence for yet — the
+**Not shown yet:** current weapon (gun) loadout. `Fetch-Assets.ps1` now downloads every weapon's
+real name, icon, and shop cost from valorant-api.com (`assets/weapons/`, `catalog.weapons`) — but
+the viewer doesn't display any of it against a player yet. The replay data for what's actually
+equipped exists (`AresInventory.CurrentEquippable`), but turning ITS class path into one of these
+real weapons needs a codename table this project doesn't have confirmed evidence for yet — the
 same kind of gap `AgentCodenames.cs` used to have before a real replay's "unrecognized agent id"
-surfaced enough real GUIDs to fill it in. Left out of this pass rather than guessed.
+surfaced enough real GUIDs to fill it in. Wiring it up is left for once that evidence exists,
+rather than guessed at now.
 
 ## Project layout
 
@@ -581,7 +589,7 @@ surfaced enough real GUIDs to fill it in. Left out of this pass rather than gues
   cone geometry, round/event attribution, team-side resolution, utility open/dormant/close state
   machine).
 - **`viewer/`** — the 2D replay viewer (plain HTML/CSS/JS, no build step); see above.
-- **`scripts/Fetch-Assets.ps1`** — downloads the viewer's map/agent art from valorant-api.com.
+- **`scripts/Fetch-Assets.ps1`** — downloads the viewer's map/agent/weapon art from valorant-api.com.
 - **`scripts/Build-Gui-Exe.ps1`** — publishes `VrfInsights.Gui` as a standalone, single-file
   `.exe` (see Option A above) so it can be launched without `dotnet run` or a `.bat` file.
 
