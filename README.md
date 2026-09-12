@@ -132,7 +132,9 @@ already wrote, exactly like Option C does by hand.
 | `ultimate_usages.json` | Ultimate-cast signal from the server's own event timeline |
 | `combat_interactions.json` | Per-round `CombatReport` interactions (damage, hits, kill/assist, wallbang) |
 | `economy.json` | `MoneyManagementComponent` credit snapshots over time |
-| `shots.json` | Per-shot events (time, firing direction, ammo) from `ReplayPlayContinuousEffectAtLocation` RPCs — **new, and unlike every other file above, not yet confirmed against a real export** — see "The ticker" below and "Honesty about what's verified vs. assumed" |
+| `hits.json` | Per-landed-hit events (time, impact point/direction, attacker/victim, weapon) from `MulticastNotifyDamage_Point` RPCs — powers the minimap's hit tracer and the ticker's weapon display; **new, and — like every file below it — not yet confirmed against a real export** — see "Hit tracers, weapon, and armor" below |
+| `armor_purchases.json` | Armor item actors (Heavy/Light/"Plasma") opening a channel, resolved to their owning player — powers the ticker's armor display — see "Hit tracers, weapon, and armor" below |
+| `shots.json` | Per-shot events (time, firing direction, ammo) from `ReplayPlayContinuousEffectAtLocation` RPCs — a secondary, independent attempt at the same tracer animation `hits.json` now provides, built first and kept in case a future fix gets it working too — see "Shot tracers (secondary/experimental)" below |
 
 **About `movement.json`'s size.** `movement.parquet` replicates at close to the replay's own tick
 rate (observed up to roughly 128 samples/sec per player) — for a full match, writing every sample
@@ -566,61 +568,120 @@ deliberate scope decision — see the conversation this shipped in — rather th
   all match (so a team's total is continuous across the halftime side-swap), even though which
   color (red/green) each one currently sits under does swap at halftime along with the dots.
 
-**Not shown yet:** current weapon (gun) loadout. `Fetch-Assets.ps1` now downloads every weapon's
-real name, icon, and shop cost from valorant-api.com (`assets/weapons/`, `catalog.weapons`) — but
-the viewer doesn't display any of it against a player yet. The replay data for what's actually
-equipped exists (`AresInventory.CurrentEquippable`), but turning ITS class path into one of these
-real weapons needs a codename table this project doesn't have confirmed evidence for yet — the
-same kind of gap `AgentCodenames.cs` used to have before a real replay's "unrecognized agent id"
-surfaced enough real GUIDs to fill it in. Wiring it up is left for once that evidence exists,
-rather than guessed at now.
+**Weapon and armor, best-effort:** the ticker shows a weapon icon/name and 🛡 armor tier per player,
+both sourced from `hits.json`/`armor_purchases.json` — see "Hit tracers, weapon and armor" below
+for exactly what these can and can't tell you. The weapon display specifically is "what they were
+last confirmed holding, and how long ago" (from a landed hit), not a continuous "what they're
+holding right now" — there's no signal for that between hits, so treat a weapon shown as several
+seconds/rounds stale (dimmed and italicized in the UI) with appropriate skepticism. The icon itself
+comes from `assets/catalog.js` (`scripts/Fetch-Assets.ps1`'s own weapons fetch, matched to the
+resolved weapon by real name) — run that script first, or the ticker falls back to a 🔫 emoji plus
+the plain weapon name.
 
-### Shot tracers (minimap)
+### Hit tracers, weapon, and armor
 
-Each recent shot draws a brief animated tracer line on the minimap itself — from the shooter's
-current position, outward in the direction they fired, fading out after a fraction of a second.
+Each recent hit draws a brief effect on the minimap: a tracer line from the attacker to the exact
+point the hit landed (when this project could resolve who the attacker was), or just a small flash
+at the impact point alone (when it couldn't — still shows *that* and *where* a hit landed). This
+also drives the ticker's weapon and armor display above.
 
-**This is the newest, least-confirmed thing in this project — read this before trusting it.**
-Nothing about `shots.json`/`ShotFiredEvent` has been checked against a real decoded export yet,
-unlike everything else this README calls "exact" or "learned." It was built entirely by reading
-vrfkit's own Rust/Python source (`crates/vrfkit/src/sink/rpc.rs`, `crates/vrf-decode/src/effect.rs`
-and `effect/json.rs`, `docs/DATA.md`, and vrfkit's own reference downstream converter
-`tools/to_valplay_bundle.py`) rather than against `dump-fields`/`dump-values` output the way
-`AbilityCastsThisRound`'s member names were — the same tier of confidence `AbilityCastBuilder` had
-*before* that verification, not after. Specifically:
+**History**: this project first tried building the same animation from `shots.json` (a "shot
+fired" signal), which turned out not to produce visible output for at least one real replay. A
+second research pass into vrfkit's own source found a much better-evidenced alternative —
+`MulticastNotifyDamage_Point`, a per-landed-hit RPC vrfkit's own docs mark ✅ (its highest
+confidence tier) — and this is now the primary source for the tracer animation; `shots.json` is
+kept as a secondary, independent attempt (see its own section below) in case a future fix gets it
+working too, but nothing here depends on it.
+
+**What's confirmed by reading vrfkit's own source directly** (`crates/vrf-decode/src/table.rs`'s
+field table for `MulticastNotifyDamage_Point`, `crates/vrfkit/src/sink/rpc.rs`'s field-naming code,
+`docs/DATA.md`) — not yet independently checked against a real decoded export by this project, but
+a noticeably higher-confidence starting point than the shot-effect approach was:
+- The RPC lives on `DamageableComponent` (the health-tracking component on the character *taking*
+  damage), with `FieldName` built as `"MulticastNotifyDamage_Point.<ParamName>"` and **no** vrfkit
+  disambiguation suffix (confirmed by reading the field-naming code directly — unlike
+  `AbilityCastsThisRound`'s members, which do carry one).
+- It carries a real `DamageImpactLocation` (where the hit landed), `DamageDirection`, several
+  attacker-reference fields (`DamageCauser`, `EventInstigator`, `EventInstigatorPawn`,
+  `DamagerPlayerState`, `KillCreditPlayerState`), a `bDamageKilledTarget` flag, and an
+  `EquippableUsed` reference that resolves — via `actors.parquet`'s `class_path`, no
+  `net_guids.parquet` outer-chain walk needed for this one — to the actual weapon actor.
+- **The weapon name table (`Weapons/weapons.json`) is vrfkit's own**, not guessed or
+  reverse-engineered here: it mirrors vrfkit's `tools/equippable_table.py`, which vrfkit itself
+  generates from a companion C# replay parser's hand-maintained resolver. Cross-checked during
+  research against valorant-api.com's own `assetPath` field for several weapons (e.g. Vandal's
+  `assetPath` folder is `.../Rifles/AK/...`, matching the table's `AssaultRifle_AK` codename).
+
+**What's a strongly-evidenced inference, not a verbatim vrfkit statement:** that `ActorNetGuid` on
+these rows is the *victim* — inferred by analogy with vrfkit's own healing-observation tooling,
+which explicitly labels the equivalent field "recipient" for the sibling heal RPC (same component,
+same mechanism), not something vrfkit's docs state in so many words for the damage RPC specifically.
+
+**What's a genuinely unresolved ambiguity:** which of the five attacker-reference fields most
+reliably identifies the attacker. `DamageHitBuilder` tries them in a preference order
+(`DamagerPlayerState`/`KillCreditPlayerState` first, as direct PlayerState-style references; then
+`EventInstigatorPawn`/`DamageCauser` against known character pawns; `EventInstigator` last, since
+vrfkit's own docs flag it as "an opaque packed reference candidate: its target type has not been
+established") and keeps every candidate on the event (`AttackerCandidates` in `hits.json`) so a
+wrong pick can be diagnosed from the JSON itself without re-running the analyzer.
+
+**What's a documented assumption by analogy:** that `DamageImpactLocation`/`DamageDirection`
+decode to the same bare `"(X,Y,Z)"` string format already confirmed for `CastLocation` — plausible,
+not independently checked for these two fields specifically.
+
+**What this deliberately does NOT attempt:** live remaining-armor tracking as it absorbs damage
+(would need decoding this same RPC's raw `LifeChangeEvents[]` array, which `DamageHitBuilder` skips
+for now); cross-referencing a hit against `combat_interactions.json`'s own damage/kill numbers to
+double-check they agree; and, for armor specifically, `armor_purchases.json`
+(`ArmorPurchaseBuilder`) only reports **when a player bought/equipped a Heavy/Light/(unlabeled
+25-point "Plasma") armor item** — read from `actors.parquet`'s own actor-open events for
+`HeavyArmorItem_C`/`LightArmorItem_C`/`PlasmaArmorItem_C` (these open their own channel and show up
+there "purely because they opened a channel," per vrfkit — no RPC decoding needed for this part),
+with ownership resolved by walking `net_guids.parquet`'s `OuterNetGuid` chain up to a known player.
+It is a purchase *event*, not a live remaining-armor value, and whether it should reset every round
+or persist until a new purchase (VALORANT does let unbroken shields carry over between rounds) is
+this project's own assumption (persist-until-replaced), not confirmed against real per-round
+buy-phase timing.
+
+If tracers/weapon/armor don't appear, or look wrong, that's expected until this gets checked
+against a real export — `dotnet run --project src/VrfInsights.Cli -- dump-values ./export --field
+MulticastNotifyDamage_Point --limit 5` is the equivalent diagnostic command for this data (see
+`DamageHitBuilder`'s doc comment for exactly what to check).
+
+### Shot tracers (`shots.json`, secondary/experimental)
+
+A second, independent attempt at the same animation, built first and kept for anyone who wants to
+compare it against the hit-based one above. Each recent shot in `shots.json` can draw a brief
+animated tracer line on the minimap from the shooter's position, outward in the direction they
+fired. **This is the least-confirmed thing in this project** — it didn't produce visible tracers
+for at least one real replay, and nothing about it has been checked against a real decoded export.
+It was built entirely by reading vrfkit's own Rust/Python source
+(`crates/vrfkit/src/sink/rpc.rs`, `crates/vrf-decode/src/effect.rs` and `effect/json.rs`,
+`docs/DATA.md`, and vrfkit's reference downstream converter `tools/to_valplay_bundle.py`) — the
+same tier of confidence `AbilityCastBuilder` had *before* `dump-fields`/`dump-values` confirmed its
+assumptions, not after.
 
 - **What it's based on:** every weapon shot fires a `ReplayPlayContinuousEffectAtLocation` RPC
-  carrying three parameter blobs (`FloatValues`, `ObjectValues`, `VectorValues`) — decoded by
-  vrfkit itself into a JSON array of `{"tag": <gameplay-tag handle>, "value": ...}` pairs per blob,
-  landing in `fields.parquet` as ordinary rows (`FieldName` exactly
-  `"ReplayPlayContinuousEffectAtLocation.FloatValues"` etc. — confirmed via source, no vrfkit
-  disambiguation suffix here unlike `AbilityCastsThisRound`). `GameplayTagTable` resolves each
-  blob's numeric tag handles to real names (`FiringState.AmmoRemaining`,
-  `FiringState.NumProjectiles`, `FiringState.AttackVector.1`..`.15`, etc.) via `manifest.json`'s
-  `net_field_export_groups` — this mapping is **replay-specific** (vrfkit's own words), so it's
-  rebuilt fresh from each replay's own manifest rather than hardcoded.
-- **Genuinely unconfirmed, in order of how much it could throw off the animation:** (1) whether
-  `ActorNetGuid` on these rows really identifies the *firing player* (this project assumes yes, by
-  analogy with how `combat_interactions.json`/`economy.json` already join on it, but it could
-  instead be a weapon/equippable actor or something else in the ownership chain — if wrong, tracers
-  would draw from the wrong player or not at all); (2) the exact JSON shape of an object/vector
-  `value` (parsed defensively — see `ShotFiredBuilder`'s doc comment — but untested); (3) whether
-  two shots from the same actor can land in the same network packet (this builder's actor+channel+
-  packet+time grouping key would then collide them into one event, silently dropping a shot).
-- **Deliberately stylized, not physically simulated, even once the data itself is confirmed:**
-  VALORANT's guns are hitscan — there's no real bullet travel time or distance in the data to
-  reconstruct — so the "travel" you see is the tracer's tip animating out to a fixed cosmetic
-  length over a fraction of a second, the same treatment this project already gives an ability
-  wall's length (no real extent in the replay either). It shows *that* and roughly *which direction*
-  a shot was fired, not a literal reconstruction of the bullet's path or where it landed.
-- **Not attempted at all:** which weapon fired (needs the same weapon-codename-resolution work the
-  loadout section above describes as not yet done) and whether the shot hit anything (that's
-  `combat_interactions.json`'s job, and the two aren't currently cross-referenced).
+  carrying three parameter blobs (`FloatValues`, `ObjectValues`, `VectorValues`), each decoded by
+  vrfkit into a JSON array of `{"tag": <gameplay-tag handle>, "value": ...}` pairs, landing in
+  `fields.parquet` with `FieldName` exactly `"ReplayPlayContinuousEffectAtLocation.FloatValues"`
+  etc. `GameplayTagTable` resolves each blob's numeric tag handles to real names via
+  `manifest.json`'s `net_field_export_groups` — **replay-specific** (vrfkit's own words), rebuilt
+  fresh per replay rather than hardcoded.
+- **Likely candidates for why it came up empty**, per a follow-up research pass: this RPC's
+  `GroupPath` is the enclosing `_ClassNetCache` group (`ShooterCharacter_ClassNetCache` in a real
+  fixture vrfkit's own tests use) — not anything containing the RPC's own name — so a filter that
+  checked `GroupPath` for `ReplayPlayContinuousEffectAtLocation` would match nothing (this
+  project's actual filter checks `FieldName` instead, which should be right, but is exactly the
+  kind of assumption this whole feature rests on without having been checked against a real
+  export); or the per-element JSON `value` shape assumed for vector/object tags may not match
+  what a real replay's blob actually contains.
+- **Deliberately stylized, not physically simulated, even if the data itself gets confirmed later:**
+  VALORANT's guns are hitscan, so the "travel" is a fixed-length cosmetic animation, not a real
+  bullet path — same treatment this project already gives an ability wall's length.
 
-If tracers don't appear, or point the wrong way, or come from the wrong player, that's expected
-until this gets checked against a real export — see the diagnostic command above
-(`dump-values ... --field ReplayPlayContinuousEffectAtLocation`) and `ShotFiredBuilder`'s doc
-comment for exactly what to check first.
+See `ShotFiredBuilder`'s doc comment for the full unconfirmed-assumptions list if you want to debug
+this one specifically; otherwise the hit-based tracer above is the one to trust more.
 
 ## Project layout
 
@@ -630,9 +691,12 @@ comment for exactly what to check first.
   `game_specific_data`'s `playerLoadouts`), movement tracks, vision cones (computed — VALORANT's
   replay doesn't carry a "vision cone" field, see below), round timeline, per-round attack/defense
   sides (`Rounds/TeamSideResolver.cs` — see "Team colors" above), utility/persistent-effect
-  lifecycle, ability casts, combat interactions, economy, per-shot events (`Weapons/` — see "Shot
-  tracers" above; the newest and least-confirmed piece here), and best-effort map detection
-  (`Identity/MapDetector.cs` + `Identity/MapCatalog.cs`, against Riot's own map list).
+  lifecycle, ability casts, combat interactions, economy, per-hit events and weapon resolution
+  (`Combat/DamageHitBuilder.cs` + `Weapons/WeaponCatalog.cs` — see "Hit tracers, weapon, and armor"
+  above; the primary tracer/weapon signal), the older per-shot events (`Weapons/ShotFiredBuilder.cs`
+  — secondary/experimental, see its own section above), armor purchases
+  (`Loadouts/ArmorPurchaseBuilder.cs`), and best-effort map detection (`Identity/MapDetector.cs` +
+  `Identity/MapCatalog.cs`, against Riot's own map list).
 - **`VrfInsights.Pipeline`** — shells out to `vrfkit.exe` (`VrfkitExportRunner`) and runs the
   analysis (`AnalysisPipeline`); `FullPipeline` composes the two into the "one command" flow.
   `VrfkitBootstrapper` automates `git clone` + `cargo build` for vrfkit itself (see Option A
@@ -847,11 +911,20 @@ What's a documented **assumption**, flagged in code comments, and worth checking
   `actors.parquet`'s `spawn_yaw`, same confidence as the rest of that table — what's an assumption
   is only how the 2D viewer *uses* it (a fixed-length line for a wall, since the replay has no
   size/extent field for it).
-- **`shots.json`/`ShotFiredEvent`/`ShotFiredBuilder`/`GameplayTagTable`** (powers the minimap's
-  shot-tracer animation) — the newest addition, and a different tier of confidence from everything
-  else on this list: it was built from reading vrfkit's own source directly, not from running
-  `dump-fields`/`dump-values` against a real export the way `AbilityCastsThisRound`'s member names
-  were confirmed below. See "Shot tracers" above for exactly what's assumed and how to check it.
+- **`hits.json`/`DamageHitEvent`/`DamageHitBuilder`, `armor_purchases.json`/`ArmorPurchase`/
+  `ArmorPurchaseBuilder`, and `Weapons/WeaponCatalog`** (power the minimap's hit-tracer animation
+  and the ticker's weapon/armor display) — like the `shots.json` entry below, built from reading
+  vrfkit's own source directly rather than confirmed here via `dump-fields`/`dump-values` against a
+  real export. Higher-confidence than `shots.json` was, though, since the underlying RPC
+  (`MulticastNotifyDamage_Point`) is one vrfkit's own docs mark at their highest confidence tier
+  (✅) — see "Hit tracers, weapon, and armor" above for the full breakdown of what's confirmed vs.
+  inferred vs. assumed within this piece, and how to check it against your own export.
+- **`shots.json`/`ShotFiredEvent`/`ShotFiredBuilder`/`GameplayTagTable`** — the original attempt at
+  the same tracer animation `hits.json` now provides; kept as a secondary/experimental path since
+  it didn't produce visible output for at least one real replay (see "Shot tracers
+  (secondary/experimental)" above). Same "built from source, not confirmed" caveat as `hits.json`
+  above, but a lower confidence tier — the RPC it reads isn't one vrfkit's own docs specifically
+  rate, unlike `MulticastNotifyDamage_Point`.
 
 `VrfInsights.Pipeline` and `VrfInsights.Gui` are new and carry the same caveat as the rest of
 this project — please actually click through the GUI once (or run `vrf-insights run`) before

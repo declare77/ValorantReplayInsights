@@ -104,6 +104,9 @@ public static class AnalysisPipeline
         // Compact, not indented -- a full match can have thousands of shots (see ShotFiredEvent's
         // doc comment), same reasoning as movement.json/vision_cones.json below.
         await WriteJsonAsync(Path.Combine(outputDirectory, "shots.json"), analysis.Shots, CompactJsonOptions);
+        // Also compact -- a full match's hit count is in the same rough range as its shot count.
+        await WriteJsonAsync(Path.Combine(outputDirectory, "hits.json"), analysis.Hits, CompactJsonOptions);
+        await WriteJsonAsync(Path.Combine(outputDirectory, "armor_purchases.json"), analysis.ArmorPurchases);
 
         if (options.WithVision)
         {
@@ -119,7 +122,7 @@ public static class AnalysisPipeline
         }
 
         onStatus?.Invoke($"Wrote analysis output to: {Path.GetFullPath(outputDirectory)}");
-        onStatus?.Invoke($"Players: {analysis.Players.Count}   Rounds: {analysis.Rounds.Count}   Utility events: {analysis.Utility.Count}   Ability casts: {analysis.AbilityCasts.Count}   Combat interactions: {analysis.CombatInteractions.Count}   Shots: {analysis.Shots.Count}");
+        onStatus?.Invoke($"Players: {analysis.Players.Count}   Rounds: {analysis.Rounds.Count}   Utility events: {analysis.Utility.Count}   Ability casts: {analysis.AbilityCasts.Count}   Combat interactions: {analysis.CombatInteractions.Count}   Shots: {analysis.Shots.Count}   Hits: {analysis.Hits.Count}   Armor purchases: {analysis.ArmorPurchases.Count}");
 
         return analysis;
     }

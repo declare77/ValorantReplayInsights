@@ -16,6 +16,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Identity/agents.json" />
     <EmbeddedResource Include="Identity/maps.json" />
+    <EmbeddedResource Include="Weapons/weapons.json" />
   </ItemGroup>
 
 </Project>

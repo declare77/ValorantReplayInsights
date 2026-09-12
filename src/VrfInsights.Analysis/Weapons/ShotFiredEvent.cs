@@ -1,3 +1,5 @@
+using VrfInsights.Analysis.Common;
+
 namespace VrfInsights.Analysis.Weapons;
 
 /// <summary>
@@ -48,6 +50,12 @@ namespace VrfInsights.Analysis.Weapons;
 /// weapon loadout" already documents as out of scope for now).</param>
 /// <param name="RawTags">Every other resolved <c>{tagName: value}</c> pair from all three decoded
 /// blobs (float/object/vector), for anything not promoted to a field above.</param>
+///
+/// <remarks>As of this writing, unverified against a real export and not producing visible output
+/// for at least one user — see <see cref="Combat.DamageHitEvent"/> for a second, much
+/// better-evidenced signal (vrfkit's own docs mark it ✅) built afterward specifically because this
+/// one didn't pan out; the viewer now draws its shot-tracer animation from that instead, and only
+/// falls back to this one if a replay's <c>shots.json</c> happens to have entries.</remarks>
 public sealed record ShotFiredEvent(
     long ActorNetGuid,
     long TimeMs,
@@ -56,12 +64,7 @@ public sealed record ShotFiredEvent(
     double? RandomSeed,
     double? TracerOption,
     double? BurstShotNumber,
-    IReadOnlyList<ShotVector> AttackVectors,
+    IReadOnlyList<Vec3> AttackVectors,
     long? FiringPlayerStateNetGuid,
     long? FiringStateNetGuid,
     IReadOnlyDictionary<string, object?> RawTags);
-
-/// <summary>A plain X/Y/Z direction vector, as a named record rather than a <c>ValueTuple</c> so
-/// it round-trips through <c>System.Text.Json</c> correctly (see <see cref="ShotFiredEvent.AttackVectors"/>'s
-/// doc comment).</summary>
-public sealed record ShotVector(double X, double Y, double Z);

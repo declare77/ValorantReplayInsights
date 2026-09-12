@@ -37,8 +37,14 @@ public sealed class MatchAnalysis
     public required IReadOnlyList<EconomySnapshot> Economy { get; init; }
     /// <summary>Per-shot events (see <see cref="Weapons.ShotFiredBuilder"/>'s doc comment for how
     /// confident to be in this — unlike most of the rest of this class, NOT yet confirmed against
-    /// a real decoded export).</summary>
+    /// a real decoded export, and not producing visible output for at least one real replay).</summary>
     public required IReadOnlyList<ShotFiredEvent> Shots { get; init; }
+    /// <summary>Per-hit events (see <see cref="Combat.DamageHitBuilder"/>'s doc comment) — built
+    /// as a second, much better-evidenced alternative to <see cref="Shots"/> after that one didn't
+    /// pan out.</summary>
+    public required IReadOnlyList<DamageHitEvent> Hits { get; init; }
+    /// <summary>Armor purchases (see <see cref="Loadouts.ArmorPurchaseBuilder"/>'s doc comment).</summary>
+    public required IReadOnlyList<ArmorPurchase> ArmorPurchases { get; init; }
 
     public static MatchAnalysis Build(VrfExportSet export, AgentCatalog agentCatalog, VisionConeOptions? visionOptions = null) =>
         Build(export, agentCatalog, MapCatalog.LoadEmbedded(), visionOptions);
@@ -50,6 +56,7 @@ public sealed class MatchAnalysis
         IReadOnlyList<MatchEvent> events = RoundTimelineBuilder.BuildEventTimeline(export.Events, rounds);
         IReadOnlyList<PlayerTrack> tracks = MovementTimelineBuilder.Build(export, players);
         MapInfo? map = MapDetector.Detect(export, mapCatalog);
+        WeaponCatalog weaponCatalog = WeaponCatalog.LoadEmbedded();
 
         return new MatchAnalysis
         {
@@ -67,6 +74,8 @@ public sealed class MatchAnalysis
             CombatInteractions = CombatReportBuilder.Build(export.Fields),
             Economy = EconomySnapshotBuilder.Build(export.Fields),
             Shots = ShotFiredBuilder.Build(export.Fields, GameplayTagTable.Build(export.Manifest.NetFieldExportGroups)),
+            Hits = DamageHitBuilder.Build(export.Fields, export.Actors, players, weaponCatalog),
+            ArmorPurchases = ArmorPurchaseBuilder.Build(export.Actors, export.NetGuids, players, rounds),
         };
     }
 

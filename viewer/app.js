@@ -105,6 +105,13 @@ const SHOT_TRACER_LENGTH_UNITS = 700;
 const SHOT_TRACER_TRAVEL_MS = 90;
 const SHOT_TRACER_FADE_MS = 260;
 
+// Hit tracers (see DamageHitEvent) -- a real impact point is available here (unlike the
+// shots.json tracer above, which only ever has a fired direction), so this draws attacker ->
+// impact-point when the attacker resolved, or just a small impact flash at the impact point when
+// it didn't (still shows *that* and *where* a hit landed, even without a confirmed shooter).
+const HIT_TRACER_FADE_MS = 260;
+const HIT_IMPACT_FLASH_FADE_MS = 220;
+
 // Words too generic/common across almost every ability's UI text (a HUD action verb like "FIRE",
 // or a filler word) to count as a real content match -- see resolveUtilityAbilityMatch's doc
 // comment. Extend freely, same editable-list philosophy as UtilityCategory's own keyword table
@@ -661,9 +668,14 @@ const state = {
   economy: [],   // raw economy.json
   combat: [],    // raw combat_interactions.json
   shots: [],     // raw shots.json (see ShotFiredEvent's C# doc comment for confidence level)
+  hits: [],      // raw hits.json (see DamageHitEvent's C# doc comment) -- sorted by TimeMs
+  armorPurchases: [],  // raw armor_purchases.json (see ArmorPurchaseBuilder's C# doc comment)
   economyByActor: new Map(),   // ActorNetGuid -> [EconomySnapshot] sorted by TimeMs
   combatByActor: new Map(),    // ActorNetGuid -> [CombatInteraction] sorted by TimeMs
   shotsByActor: new Map(),     // ActorNetGuid -> [ShotFiredEvent] sorted by TimeMs
+  hitsByAttacker: new Map(),   // AttackerActorNetGuid -> [DamageHitEvent] sorted by TimeMs (weapon lookup)
+  armorByActor: new Map(),     // ActorNetGuid -> [ArmorPurchase] sorted by TimeMs
+  weaponImageByName: new Map(),  // WeaponDisplayName -> icon URL or null (a resolved miss), see weaponImageUrlFor()
   castsBySubject: new Map(),   // Subject -> [AbilityCastEvent] sorted by FirstObservedAtMs
   learnedSlotMap: new Map(),   // playerKey -> Map(rawSlot -> real ability slot name, e.g. "grenade")
   roundWinners: new Map(),     // RoundNumber -> 'attack' | 'defense' | null (unknown)
@@ -860,6 +872,11 @@ fileInput.addEventListener('change', async (e) => {
     // doc comment) -- powers the minimap's shot-tracer animation. Missing/empty just means no
     // tracers are drawn, same graceful-degradation as every other optional file here.
     state.shots = await readOptional('shots.json', []);
+    // Optional -- a second, better-evidenced source for the same tracer animation (see
+    // DamageHitEvent's C# doc comment), and the ticker's weapon display.
+    state.hits = await readOptional('hits.json', []);
+    // Optional -- the ticker's armor display (see ArmorPurchaseBuilder's C# doc comment).
+    state.armorPurchases = await readOptional('armor_purchases.json', []);
   } catch (err) {
     loadStatus.textContent = "Couldn't read one of those files as JSON: " + err.message;
     return;
@@ -999,6 +1016,32 @@ function agentImageFor(player) {
   const img = new Image();
   img.src = '../assets/' + entry.image;
   return img;
+}
+
+/** Actual VALORANT weapon icon URL for a resolved weapon display name (e.g. "Vandal"), from
+ * catalog.js's own weapons list (scripts/Fetch-Assets.ps1, downloaded from valorant-api.com) --
+ * matched by display name, since that's the one field both WeaponCatalog.Resolve() (this
+ * project's C# side, from vrfkit's own codename table) and valorant-api.com's weapons list use for
+ * the same real gun name. Tries an exact match first, then a case-insensitive one (the two tables
+ * were built independently and could differ only in casing); a genuine miss -- ability-derived
+ * "weapons" like Chamber's ult/Q, Melee, Unarmed, or Spike, none of which are in valorant-api.com's
+ * weapons list the way real guns are -- caches null so it isn't re-searched every render. Results
+ * are cached per name since this can be called once per player per frame. */
+function weaponImageUrlFor(displayName) {
+  if (!displayName) return null;
+  if (state.weaponImageByName.has(displayName)) return state.weaponImageByName.get(displayName);
+
+  const catalog = window.VRF_CATALOG;
+  const list = (catalog && catalog.weapons) || [];
+  let entry = list.find((w) => w.displayName === displayName);
+  if (!entry) {
+    const lower = displayName.toLowerCase();
+    entry = list.find((w) => (w.displayName || '').toLowerCase() === lower);
+  }
+
+  const url = entry ? '../assets/' + entry.image : null;
+  state.weaponImageByName.set(displayName, url);
+  return url;
 }
 
 // ---------------------------------------------------------------------------
@@ -1482,6 +1525,24 @@ function buildTickerIndexes() {
   }
   for (const arr of state.shotsByActor.values()) arr.sort((a, b) => a.TimeMs - b.TimeMs);
 
+  // state.hits is already TimeMs-sorted (the C# builder sorts it) -- drawHits() below walks it
+  // directly rather than needing a per-actor bucket, since a hit's *origin* (the attacker) still
+  // needs a per-actor position lookup regardless of any bucketing.
+  state.hitsByAttacker = new Map();
+  for (const h of state.hits) {
+    if (h.AttackerActorNetGuid == null) continue;
+    if (!state.hitsByAttacker.has(h.AttackerActorNetGuid)) state.hitsByAttacker.set(h.AttackerActorNetGuid, []);
+    state.hitsByAttacker.get(h.AttackerActorNetGuid).push(h);
+  }
+  for (const arr of state.hitsByAttacker.values()) arr.sort((a, b) => a.TimeMs - b.TimeMs);
+
+  state.armorByActor = new Map();
+  for (const a of state.armorPurchases) {
+    if (!state.armorByActor.has(a.ActorNetGuid)) state.armorByActor.set(a.ActorNetGuid, []);
+    state.armorByActor.get(a.ActorNetGuid).push(a);
+  }
+  for (const arr of state.armorByActor.values()) arr.sort((a, b) => a.TimeMs - b.TimeMs);
+
   state.castsBySubject = new Map();
   for (const c of state.abilityCasts) {
     if (!c.Subject) continue;
@@ -1506,6 +1567,30 @@ function moneyForPlayerAt(player, t) {
   if (!arr || arr.length === 0) return null;
   const snap = latestAt(arr, t);
   return snap ? snap.Money : null;
+}
+
+/** Last weapon this player was confirmed holding, as of t -- from the most recent hits.json entry
+ * where they're the resolved attacker (see DamageHitEvent's C# doc comment for how confident to
+ * be in that attribution). Returns null before their first confirmed hit, or if hits.json wasn't
+ * loaded/didn't resolve any attacker for this player. There is no way to know what they're holding
+ * BETWEEN hits (an unconfirmed/no-shot gap) -- callers should treat the returned age (how long ago
+ * this was last confirmed) as a staleness signal, not assume it's still current. */
+function weaponForPlayerAt(player, t) {
+  const arr = state.hitsByAttacker.get(player.ActorNetGuid);
+  if (!arr || arr.length === 0) return null;
+  const hit = latestAt(arr, t);
+  if (!hit || !hit.WeaponDisplayName) return null;
+  return { name: hit.WeaponDisplayName, ageMs: t - hit.TimeMs };
+}
+
+/** Current armor tier for this player, as of t -- from the most recent armor_purchases.json entry
+ * (see ArmorPurchaseBuilder's C# doc comment: this is "which tier did they last equip", not a
+ * live remaining-armor value that depletes from combat). Returns null before any purchase, or if
+ * armor_purchases.json wasn't loaded. */
+function armorForPlayerAt(player, t) {
+  const arr = state.armorByActor.get(player.ActorNetGuid);
+  if (!arr || arr.length === 0) return null;
+  return latestAt(arr, t);
 }
 
 function kdaForPlayerAt(player, t) {
@@ -1894,6 +1979,61 @@ function buildPlayerCardEl(player, round, t, sideColor) {
   stats.appendChild(kdaEl);
   card.appendChild(stats);
 
+  // Armor/weapon -- both best-effort, both labeled as such in their tooltips rather than shown
+  // with false confidence (see armorForPlayerAt/weaponForPlayerAt's doc comments).
+  const loadout = document.createElement('div');
+  loadout.className = 'ticker-loadout-row';
+
+  const armor = armorForPlayerAt(player, t);
+  const armorEl = document.createElement('span');
+  armorEl.className = 'ticker-armor' + (armor ? '' : ' ticker-unknown');
+  if (armor) {
+    // 'Other' (PlasmaArmorItem_C) is deliberately NOT relabeled as "Shield"/"Regen Shield" here --
+    // that's an unconfirmed guess this project's own C# side (see ArmorTier's doc comment)
+    // explicitly declined to make, so the ticker stays just as honest about it.
+    const label = armor.Tier === 'Heavy' ? 'Heavy' : armor.Tier === 'Light' ? 'Light' : 'Other';
+    armorEl.textContent = '🛡 ' + label;
+    armorEl.title = label + ' armor (' + armor.MaxArmor + ' pts), last equipped/purchased ' +
+      Math.round((t - armor.TimeMs) / 1000) + 's ago. This is a purchase event, not a live ' +
+      'remaining-armor value' +
+      (armor.Tier === 'Other' ? ' -- "Other" is PlasmaArmorItem_C, whose in-game meaning vrfkit\'s own docs don\'t confirm beyond its 25-point cap' : '') +
+      ' -- see the README\'s armor section for what this can and can\'t tell you.';
+  } else {
+    armorEl.textContent = '🛡 —';
+    armorEl.title = 'No confirmed armor purchase yet this match.';
+  }
+  loadout.appendChild(armorEl);
+
+  const weapon = weaponForPlayerAt(player, t);
+  const weaponEl = document.createElement('span');
+  const weaponStale = weapon && weapon.ageMs > 15000;
+  weaponEl.className = 'ticker-weapon' + (weapon ? (weaponStale ? ' ticker-stale' : '') : ' ticker-unknown');
+  if (weapon) {
+    // Real weapon icon when catalog.js has one for this name (see scripts/Fetch-Assets.ps1);
+    // falls back to the 🔫 emoji + name alone when it doesn't (an ability-derived "weapon" like
+    // Chamber's ult, or a name catalog.js's fetch just doesn't have).
+    const iconUrl = weaponImageUrlFor(weapon.name);
+    if (iconUrl) {
+      const iconImg = document.createElement('img');
+      iconImg.className = 'ticker-weapon-icon';
+      iconImg.src = iconUrl;
+      iconImg.alt = weapon.name;
+      weaponEl.appendChild(iconImg);
+      weaponEl.appendChild(document.createTextNode(weapon.name));
+    } else {
+      weaponEl.textContent = '🔫 ' + weapon.name;
+    }
+    weaponEl.title = 'Last confirmed from a landed hit ' + Math.round(weapon.ageMs / 1000) + 's ago -- ' +
+      'not necessarily what they\'re holding RIGHT NOW (there\'s no signal for that between hits). ' +
+      'See the README\'s "Hit tracers, weapon, and armor" section for how this is resolved.';
+  } else {
+    weaponEl.textContent = '🔫 —';
+    weaponEl.title = 'No confirmed weapon yet -- needs hits.json and at least one hit this project could attribute to this player.';
+  }
+  loadout.appendChild(weaponEl);
+
+  card.appendChild(loadout);
+
   const abilities = document.createElement('div');
   abilities.className = 'ticker-abilities';
   for (const abilityCard of abilityCardsForPlayerAt(player, round, t)) {
@@ -2128,6 +2268,7 @@ function render() {
   if (state.showVision && state.visionCones) drawVisionCones(w, h);
   drawPlayers(w, h);
   drawShots(w, h);
+  drawHits(w, h);
 }
 
 /**
@@ -2181,6 +2322,57 @@ function drawShots(w, h) {
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
+    }
+  }
+}
+
+/**
+ * Animates a brief effect for each recent hit from hits.json (see DamageHitEvent's C# doc comment
+ * for confidence level -- built as a second, much better-evidenced source for this same animation
+ * after shots.json/drawShots() didn't produce visible output for at least one real replay).
+ *
+ * Unlike drawShots(), a real impact point is available here, so when the attacker resolved this
+ * draws a proper tracer line from the attacker's position to where the hit landed; when the
+ * attacker didn't resolve (see DamageHitEvent.AttackerActorNetGuid's doc comment for why that can
+ * happen), this still draws a small flash at the impact point alone -- "a hit landed here", even
+ * without a confirmed shooter.
+ */
+function drawHits(w, h) {
+  if (!state.hits || state.hits.length === 0) return;
+  const t = state.currentTimeMs;
+
+  // state.hits is TimeMs-sorted -- binary-search to the recent tail rather than scanning the
+  // whole match's hit list every frame.
+  const idx = findTimedIndex(state.hits, t);
+  for (let i = idx; i >= 0; i--) {
+    const hit = state.hits[i];
+    const age = t - hit.TimeMs;
+    if (age > HIT_TRACER_FADE_MS && age > HIT_IMPACT_FLASH_FADE_MS) break; // time-sorted -- earlier is only older
+    if (age < 0 || !hit.ImpactLocation) continue;
+
+    const impact = toPixel(hit.ImpactLocation.X, hit.ImpactLocation.Y, w, h);
+
+    if (hit.AttackerActorNetGuid != null && age <= HIT_TRACER_FADE_MS) {
+      const samples = state.samplesByActorNetGuid.get(hit.AttackerActorNetGuid);
+      const sample = samples ? interpolateSample(samples, hit.TimeMs) : null;
+      if (sample) {
+        const origin = toPixel(sample.PosX, sample.PosY, w, h);
+        const fadeFrac = Math.max(0, 1 - age / HIT_TRACER_FADE_MS);
+        ctx.strokeStyle = `rgba(255,90,60,${(fadeFrac * 0.85).toFixed(2)})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(origin.x, origin.y);
+        ctx.lineTo(impact.x, impact.y);
+        ctx.stroke();
+      }
+    }
+
+    if (age <= HIT_IMPACT_FLASH_FADE_MS) {
+      const flashFrac = Math.max(0, 1 - age / HIT_IMPACT_FLASH_FADE_MS);
+      ctx.fillStyle = `rgba(255,210,80,${(flashFrac * 0.95).toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(impact.x, impact.y, 5 * flashFrac + 2, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 }

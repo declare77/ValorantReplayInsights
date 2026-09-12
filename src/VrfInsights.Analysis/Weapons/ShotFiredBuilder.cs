@@ -1,5 +1,6 @@
 using System.Text.Json;
 using VrfInsights.Data.Tables;
+using VrfInsights.Analysis.Common;
 
 namespace VrfInsights.Analysis.Weapons;
 
@@ -94,11 +95,11 @@ public static class ShotFiredBuilder
                 continue;
             }
 
-            var attackVectors = new List<ShotVector>();
+            var attackVectors = new List<Vec3>();
             foreach (KeyValuePair<string, JsonElement> tag in vectorTags)
             {
                 if (tag.Key.StartsWith(AttackVectorTagPrefix, StringComparison.Ordinal) &&
-                    TryParseVector(tag.Value, out ShotVector? vector))
+                    TryParseVector(tag.Value, out Vec3? vector))
                 {
                     attackVectors.Add(vector);
                 }
@@ -223,7 +224,7 @@ public static class ShotFiredBuilder
     /// export, so this tries both plausible encodings: a 3-element numeric array
     /// <c>[x, y, z]</c>, or an object with an <c>x</c>/<c>y</c>/<c>z</c> (any case) property
     /// set.</summary>
-    private static bool TryParseVector(JsonElement value, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ShotVector? vector)
+    private static bool TryParseVector(JsonElement value, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Vec3? vector)
     {
         if (value.ValueKind == JsonValueKind.Array)
         {
@@ -233,7 +234,7 @@ public static class ShotFiredBuilder
                 items[1].ValueKind == JsonValueKind.Number && items[1].TryGetDouble(out double y) &&
                 items[2].ValueKind == JsonValueKind.Number && items[2].TryGetDouble(out double z))
             {
-                vector = new ShotVector(x, y, z);
+                vector = new Vec3(x, y, z);
                 return true;
             }
         }
@@ -244,7 +245,7 @@ public static class ShotFiredBuilder
             double? z = GetAnyCase(value, "z", "Z");
             if (x.HasValue && y.HasValue && z.HasValue)
             {
-                vector = new ShotVector(x.Value, y.Value, z.Value);
+                vector = new Vec3(x.Value, y.Value, z.Value);
                 return true;
             }
         }

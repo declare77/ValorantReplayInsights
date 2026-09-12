@@ -1,0 +1,30 @@
+{
+  "_comment": "Internal Unreal class-name codename -> real VALORANT weapon name/category. NOT fetched from valorant-api.com (which has no internal-name field) -- this is vrfkit's OWN generated mapping (tools/equippable_table.py, itself generated from a companion C# replay parser's hand-maintained table, ValorantEquippableResolver.cs), copied in here as a small static table the same way agents.json holds a copy of valorant-api's agent-id table. 'codename' is the substring to look for anywhere in an actor's class_path/archetype_path (matching WeaponCatalog.Resolve's substring approach, the same technique UtilityEffectClassifier already uses for ability class paths) -- not an exact full path, since vrfkit's path formatting could vary slightly by build. Confirmed by a research pass reading vrfkit's source directly, cross-checked against valorant-api.com's own assetPath field for several weapons; NOT independently confirmed by this project against a real decoded export.",
+  "weapons": [
+    { "codename": "BasePistol", "displayName": "Classic", "category": "sidearm" },
+    { "codename": "SawedOffShotgun", "displayName": "Shorty", "category": "sidearm" },
+    { "codename": "AutomaticPistol", "displayName": "Frenzy", "category": "sidearm" },
+    { "codename": "LugerPistol", "displayName": "Ghost", "category": "sidearm" },
+    { "codename": "CompactPistol", "displayName": "Compact Pistol", "category": "sidearm" },
+    { "codename": "RevolverPistol", "displayName": "Sheriff", "category": "sidearm" },
+    { "codename": "Vector", "displayName": "Stinger", "category": "smg" },
+    { "codename": "SubMachineGun_MP5", "displayName": "Spectre", "category": "smg" },
+    { "codename": "PumpShotgun", "displayName": "Bucky", "category": "shotgun" },
+    { "codename": "AutomaticShotgun", "displayName": "Judge", "category": "shotgun" },
+    { "codename": "AssaultRifle_Burst", "displayName": "Bulldog", "category": "rifle" },
+    { "codename": "DMR", "displayName": "Guardian", "category": "rifle" },
+    { "codename": "AssaultRifle_ACR", "displayName": "Phantom", "category": "rifle" },
+    { "codename": "AssaultRifle_AK", "displayName": "Vandal", "category": "rifle" },
+    { "codename": "LeverSniperRifle", "displayName": "Marshal", "category": "sniper_rifle" },
+    { "codename": "BoltSniper", "displayName": "Operator", "category": "sniper_rifle" },
+    { "codename": "DS_Gun", "displayName": "Outlaw", "category": "sniper_rifle" },
+    { "codename": "LightMachineGun", "displayName": "Ares", "category": "machine_gun" },
+    { "codename": "HeavyMachineGun", "displayName": "Odin", "category": "machine_gun" },
+    { "codename": "Gun_Deadeye_X_Giantslayer", "displayName": "Tour de Force (Chamber ult)", "category": "ability" },
+    { "codename": "Gun_Deadeye_Q_Pistol", "displayName": "Headhunter (Chamber Q)", "category": "ability" },
+    { "codename": "Gun_Deadeye", "displayName": "Chamber weapon (unclassified)", "category": "ability" },
+    { "codename": "Ability_Melee_Base", "displayName": "Melee", "category": "melee" },
+    { "codename": "Equippable_Unarmed", "displayName": "Unarmed", "category": "unarmed" },
+    { "codename": "BombEquippable", "displayName": "Spike", "category": "bomb" }
+  ]
+}

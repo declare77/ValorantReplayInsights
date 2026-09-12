@@ -25,8 +25,10 @@
     folder itself, not the <code>export</code> subfolder inside it). <code>match.json</code> and
     <code>movement.json</code> are required; the rest add detail if present —
     <code>economy.json</code> and <code>combat_interactions.json</code> power the money/K-D-A
-    ticker panel specifically, and <code>shots.json</code> (see the README — this one hasn't been
-    checked against a real export yet) powers the minimap's animated shot tracers.
+    ticker panel specifically; <code>hits.json</code> powers the minimap's hit-tracer animation
+    and the ticker's weapon display; <code>armor_purchases.json</code> powers the ticker's armor
+    display; and <code>shots.json</code> is a second, less-confirmed source for the same tracer
+    animation. See the README for exactly how confident to be in each of these newer files.
   </p>
   <input type="file" id="fileInput" multiple accept=".json">
   <p id="loadStatus"></p>

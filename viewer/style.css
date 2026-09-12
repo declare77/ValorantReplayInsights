@@ -212,6 +212,31 @@ main {
 .ticker-money { color: #7ee787; }
 .ticker-kda { color: var(--text); }
 
+.ticker-loadout-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 2px 0 4px;
+}
+.ticker-armor, .ticker-weapon {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ticker-weapon-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.ticker-unknown { opacity: 0.45; }
+.ticker-stale { opacity: 0.6; font-style: italic; }
+
 .ticker-abilities {
   display: flex;
   gap: 5px;
