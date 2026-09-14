@@ -43,21 +43,22 @@ public sealed class VrfExportSet
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException($"manifest.json at {manifestPath} deserialized to null.");
 
-        // Loaded sequentially, not concurrently. Each ParquetTable.LoadAsync call briefly holds
-        // the WHOLE file as a List<Dictionary<string,object>> (one dictionary per row, every
-        // column boxed) before it's converted into the much more compact typed *Row list below --
-        // fields.parquet alone can be 1.5M+ rows on a real full match. Running all five loads
-        // concurrently means all five of those bulky intermediate dictionary-lists (plus their
-        // typed replacements) can be alive in memory at the same time, which is what pushed a real
-        // deploy over Render's free-tier 512MB limit into an OutOfMemoryException. Sequential
-        // loading trades a bit of wall-clock time for a much lower peak: only one table's
-        // intermediate form needs to exist at once, and it's eligible for garbage collection as
-        // soon as its LoadAll() call returns, before the next table starts. fields.parquet (by far
-        // the largest table) is loaded first so its intermediate form has the least other live data
-        // to coexist with.
-        ParquetTable fieldsTable = await ParquetTable.LoadAsync(Path.Combine(exportDirectory, "fields.parquet"), ct);
-        IReadOnlyList<FieldRow> fields = FieldRow.LoadAll(fieldsTable);
-        fieldsTable = null!; // drop the reference explicitly so the GC can reclaim it before the next load, rather than waiting for this method to return.
+        // All five tables are loaded sequentially, not concurrently (via Task.WhenAll as this used
+        // to do) -- each ParquetTable.LoadAsync call briefly holds the WHOLE file as a
+        // List<Dictionary<string,object>> (one dictionary per row, every column boxed) before it's
+        // converted into the much more compact typed *Row list. Running all five loads
+        // concurrently means all five of those bulky intermediate forms can be alive in memory at
+        // the same time; sequential loading trades a bit of wall-clock time for a lower peak, since
+        // only one table's intermediate form needs to exist at once.
+        //
+        // fields.parquet gets a further, more important change on top of that: it uses the
+        // row-group-bounded streaming loader (FieldRow.LoadAllStreamingAsync /
+        // ParquetTable.LoadStreamingAsync), not the whole-file LoadAsync + LoadAll path the other
+        // four tables below still use. A real full match's fields.parquet is 1.5M+ rows -- large
+        // enough on its own, loaded as a single Dictionary-per-row list even sequentially, to
+        // OutOfMemoryException a 512MB container. See ParquetTable.LoadStreamingAsync's doc comment
+        // for exactly what that loader does differently and its own caveats.
+        IReadOnlyList<FieldRow> fields = await FieldRow.LoadAllStreamingAsync(Path.Combine(exportDirectory, "fields.parquet"), ct);
 
         ParquetTable movementTable = await ParquetTable.LoadAsync(Path.Combine(exportDirectory, "movement.parquet"), ct);
         IReadOnlyList<MovementRow> movement = MovementRow.LoadAll(movementTable);

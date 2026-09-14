@@ -55,4 +55,11 @@ public sealed record FieldRow(
 
     public static List<FieldRow> LoadAll(ParquetTable table) =>
         table.Rows.Select(FromRow).ToList();
+
+    /// <summary>Memory-bounded alternative to <c>ParquetTable.LoadAsync(path)</c> +
+    /// <see cref="LoadAll"/> — see <see cref="ParquetTable.LoadStreamingAsync{T}"/> for why
+    /// fields.parquet specifically needs this (a real full match's fields table is 1.5M+ rows,
+    /// large enough on its own to exhaust a 512MB container's memory when loaded all at once).</summary>
+    public static Task<List<FieldRow>> LoadAllStreamingAsync(string filePath, CancellationToken ct = default) =>
+        ParquetTable.LoadStreamingAsync(filePath, FromRow, ct);
 }
