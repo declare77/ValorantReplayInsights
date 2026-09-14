@@ -8,8 +8,8 @@
     <RootNamespace>VrfInsights.Web</RootNamespace>
     <AssemblyName>VrfInsights.Web</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <!-- Deliberately NOT net10.0-windows -- unlike VrfInsights.Gui, this has to run in a Linux
-         container (Cloud Run), so nothing here may depend on WinForms or any Windows-only API. -->
+   <!-- Deliberately NOT net10.0-windows: unlike VrfInsights.Gui, this has to run in a Linux
+            container (Cloud Run/Render), so nothing here may depend on WinForms or any Windows-only API. -->
   </PropertyGroup>
 
   <ItemGroup>
