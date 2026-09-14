@@ -8,13 +8,30 @@
     <RootNamespace>VrfInsights.Web</RootNamespace>
     <AssemblyName>VrfInsights.Web</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
-   <!-- Deliberately NOT net10.0-windows: unlike VrfInsights.Gui, this has to run in a Linux
-            container (Cloud Run/Render), so nothing here may depend on WinForms or any Windows-only API. -->
+    <!-- Deliberately NOT net10.0-windows: unlike VrfInsights.Gui, this has to run in a Linux
+         container (Cloud Run/Render), so nothing here may depend on WinForms or any Windows-only API. -->
+
+    <!-- Server GC (ASP.NET Core's default) reserves memory per-core up front, which is the wrong
+         tradeoff for this app: it isn't a high-throughput request server, it's a batch job (decode
+         one huge Parquet table, analyze it, respond) running on a tightly memory-capped host
+         (Render's free tier: 512MB). Workstation GC plus ConserveMemory=9 favors returning memory
+         to the OS aggressively over raw throughput, which is exactly the tradeoff a single
+         in-flight parse benefits from. See VrfExportSet.cs for the matching sequential-load
+         change -- both were added after a real 512MB-instance deploy hit OutOfMemoryException on a
+         real full-match fields.parquet (1.5M+ rows). -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\VrfInsights.Analysis\VrfInsights.Analysis.csproj" />
     <ProjectReference Include="..\VrfInsights.Pipeline\VrfInsights.Pipeline.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- See the GC comment above -- this is the modern (.NET 6+) way to set the runtimeconfig.json
+         knob that isn't exposed as its own MSBuild property. 9 is the maximum conservation level. -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
   </ItemGroup>
 
 </Project>
