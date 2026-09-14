@@ -17,7 +17,7 @@
          (Render's free tier: 512MB). Workstation GC plus ConserveMemory=9 favors returning memory
          to the OS aggressively over raw throughput, which is exactly the tradeoff a single
          in-flight parse benefits from. See VrfExportSet.cs for the matching sequential-load
-         change -- both were added after a real 512MB-instance deploy hit OutOfMemoryException on a
+         change: both were added after a real 512MB-instance deploy hit OutOfMemoryException on a
          real full-match fields.parquet (1.5M+ rows). -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
@@ -29,7 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- See the GC comment above -- this is the modern (.NET 6+) way to set the runtimeconfig.json
+    <!-- See the GC comment above: this is the modern (.NET 6+) way to set the runtimeconfig.json
          knob that isn't exposed as its own MSBuild property. 9 is the maximum conservation level. -->
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="9" />
   </ItemGroup>
