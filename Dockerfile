@@ -30,6 +30,14 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=vrfkit-build /vrfkit/target/release/vrfkit /app/vrfkit/vrfkit
 COPY --from=webapp-build /app/publish .
+# The viewer webpage itself, served as static files by Program.cs (app.UseStaticFiles()) at
+# /viewer/... -- so this one container is the whole site, no separate static host needed.
+# NOTE: assets/ (map/agent/weapon art from scripts/Fetch-Assets.ps1) is deliberately NOT copied in
+# here -- it's gitignored/fetched locally, not part of this repo checkout. The viewer already
+# degrades gracefully without it (plain colored shapes/fallback icons instead of real art -- same
+# as running it locally before ever running that script). Add a COPY line for assets/ here later
+# if you want the real art in the hosted version too.
+COPY viewer/ /app/wwwroot/viewer/
 ENV VRFKIT_EXE_PATH=/app/vrfkit/vrfkit
 # Cloud Run sets $PORT itself and expects the container to listen on it -- Program.cs reads this
 # env var directly (defaulting to 8080 for local `docker run`/`dotnet run`), so no ASPNETCORE_URLS

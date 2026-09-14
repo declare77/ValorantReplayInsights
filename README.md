@@ -765,7 +765,8 @@ this one specifically; otherwise the hit-based tracer above is the one to trust 
 - **`VrfInsights.Web`** — the hosted "upload a `.vrf` in your browser" backend: a small ASP.NET
   Core API wrapping the exact same `VrfInsights.Pipeline` code the CLI/GUI use, so the browser
   never has to deal with vrfkit or a folder of JSON files directly. See `server/README.md` for
-  building, deploying (Cloud Run), and wiring it behind Firebase Hosting.
+  building and deploying it (Render's free tier needs no card at all; Cloud Run is a documented
+  alternative for later).
 - **`VrfInsights.Tests`** — xUnit tests for the pure-logic pieces (array-flattening pivot, vision
   cone geometry, round/event attribution, team-side resolution, utility open/dormant/close state
   machine).

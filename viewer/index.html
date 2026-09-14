@@ -30,12 +30,14 @@
     <button id="btnUploadVrf" type="button">Upload &amp; parse</button>
     <p id="uploadVrfStatus"></p>
     <details id="backendUrlDetails">
-      <summary>Backend URL (only needed if you didn't wire up a Hosting rewrite)</summary>
+      <summary>Backend URL (only needed if this page isn't being served by that same backend)</summary>
       <p class="hint">
-        Leave this as <code>/api/parse</code> if your Firebase Hosting config rewrites that path
-        to your Cloud Run service (the recommended setup — see <code>server/README.md</code>).
-        Otherwise paste your Cloud Run service's own URL here (e.g.
-        <code>https://your-service-xyz.a.run.app</code>) — saved in this browser only.
+        Leave this as <code>/api/parse</code> if you're viewing this page at the same address your
+        backend deployed to (the default when it's deployed as one service — e.g. your
+        <code>*.onrender.com</code> or <code>*.run.app</code> URL — see
+        <code>server/README.md</code>). If you're viewing this file some other way (opened it
+        locally, hosted it separately from the backend, etc.), paste your backend's full URL here
+        instead — saved in this browser only.
       </p>
       <input type="text" id="backendUrlInput" placeholder="/api/parse" style="width: 100%;">
     </details>

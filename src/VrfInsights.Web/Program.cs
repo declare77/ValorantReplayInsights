@@ -48,6 +48,15 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAn
 var app = builder.Build();
 app.UseCors();
 
+// Serves viewer/ (copied into wwwroot/viewer by the Dockerfile) so one deployed service is both
+// the API and the webpage -- no separate static host (Firebase Hosting or otherwise) required.
+// If you DO serve the viewer from somewhere else instead, this is harmless: that other host just
+// won't get any traffic, and the "Backend URL" field in the viewer already lets it call this
+// service's URL directly (CORS above covers that cross-origin case).
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.MapGet("/", () => Results.Redirect("/viewer/index.html"));
+
 app.MapGet("/healthz", () => Results.Text("ok"));
 
 app.MapPost("/api/parse", async (HttpRequest request, CancellationToken ct) =>
