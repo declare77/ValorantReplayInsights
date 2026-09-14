@@ -51,13 +51,15 @@ public sealed class VrfExportSet
         // the same time; sequential loading trades a bit of wall-clock time for a lower peak, since
         // only one table's intermediate form needs to exist at once.
         //
-        // fields.parquet gets a further, more important change on top of that: it uses the
-        // row-group-bounded streaming loader (FieldRow.LoadAllStreamingAsync /
-        // ParquetTable.LoadStreamingAsync), not the whole-file LoadAsync + LoadAll path the other
-        // four tables below still use. A real full match's fields.parquet is 1.5M+ rows -- large
-        // enough on its own, loaded as a single Dictionary-per-row list even sequentially, to
-        // OutOfMemoryException a 512MB container. See ParquetTable.LoadStreamingAsync's doc comment
-        // for exactly what that loader does differently and its own caveats.
+        // fields.parquet gets a further, more important change on top of that: it uses
+        // FieldRow.LoadAllStreamingAsync, a column-native reader that never builds a
+        // Dictionary<string,object> per row at all, instead of the whole-file LoadAsync + LoadAll
+        // path the other four tables below still use. A real full match's fields.parquet is 1.5M+
+        // rows -- large enough on its own, loaded as a Dictionary-per-row list, to
+        // OutOfMemoryException a 512MB container (a row-group-bounded version of that same
+        // Dictionary approach was tried first and didn't help -- vrfkit writes this table as a
+        // single row group). See FieldRow.LoadAllStreamingAsync's doc comment for details and
+        // caveats.
         IReadOnlyList<FieldRow> fields = await FieldRow.LoadAllStreamingAsync(Path.Combine(exportDirectory, "fields.parquet"), ct);
 
         ParquetTable movementTable = await ParquetTable.LoadAsync(Path.Combine(exportDirectory, "movement.parquet"), ct);

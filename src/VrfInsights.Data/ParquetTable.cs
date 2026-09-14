@@ -1,4 +1,3 @@
-using Parquet;
 using Parquet.Serialization;
 
 namespace VrfInsights.Data;
@@ -9,6 +8,15 @@ namespace VrfInsights.Data;
 /// dictionary-encoded/ZSTD-compressed Parquet with plain primitive columns (see
 /// vrfkit's docs/USAGE.md), so there is no need to hand-walk <c>DataField</c>s per table —
 /// one call reads every row group and every column.
+///
+/// <para>Used for the four smaller tables (movement/actors/net_guids/events). fields.parquet is
+/// the one exception — a real full match's fields table is 1.5M+ rows, large enough on its own
+/// to exceed a 512MB container's memory when loaded this way (one
+/// <c>Dictionary&lt;string,object&gt;</c> per row is expensive: far more memory than the handful
+/// of primitive values it actually holds). Reading it one row group at a time didn't help either
+/// — vrfkit apparently writes it as a single row group, so that bounded nothing. See
+/// <see cref="Tables.FieldRow.LoadAllStreamingAsync"/> for the column-native reader that
+/// replaces this for that one table specifically.</para>
 /// </summary>
 public sealed class ParquetTable
 {
@@ -45,66 +53,5 @@ public sealed class ParquetTable
         }
 
         return await LoadAsync(filePath, ct);
-    }
-
-    /// <summary>
-    /// Like <see cref="LoadAsync"/> followed by converting every row, except it converts and
-    /// discards each ROW GROUP's dictionaries before reading the next one, instead of
-    /// materializing every row of the whole file as <c>Dictionary&lt;string,object&gt;</c> at
-    /// once (which is what <see cref="LoadAsync"/> does, via a single whole-file call to
-    /// <see cref="ParquetSerializer.DeserializeUntypedAsync"/>).
-    ///
-    /// <para>Added for <c>fields.parquet</c> specifically: a real full match has 1.5M+ rows
-    /// there, and loading the whole file's dictionaries at once was enough to
-    /// <c>OutOfMemoryException</c> a 512MB container even with that table loaded on its own.
-    /// This works by calling the SAME <c>DeserializeUntypedAsync</c> method used above, but once
-    /// per row group via its own <c>rowGroupIndex</c> parameter (confirmed against
-    /// parquet-dotnet's actual source: passing a specific index makes it deserialize only that
-    /// one row group's data, not the rest of the file) — so <paramref name="convert"/> can be an
-    /// existing <c>*Row.FromRow</c> method unchanged, with the exact same
-    /// <see cref="RowConvert"/>-based coercion/null-handling every table already relies on. The
-    /// only thing that changes is HOW MANY rows are held in dictionary form at once (one row
-    /// group's worth, not the whole file).</para>
-    ///
-    /// <para><b>Honest caveat</b>: this bounds peak memory to one row group, not to a fixed small
-    /// amount — if vrfkit ever writes a table as a single row group (or very few, very large
-    /// ones), this helps little or not at all. Row-group sizing wasn't verified against a real
-    /// vrfkit export while writing this (none was available) — if a real upload still runs out of
-    /// memory after this change, that's the first thing to check before assuming this fix did
-    /// nothing.</para>
-    /// </summary>
-    public static async Task<List<T>> LoadStreamingAsync<T>(
-        string filePath,
-        Func<IReadOnlyDictionary<string, object>, T> convert,
-        CancellationToken ct = default)
-    {
-        await using FileStream fs = File.OpenRead(filePath);
-
-        int rowGroupCount;
-        await using (ParquetReader countReader = await ParquetReader.CreateAsync(fs, cancellationToken: ct))
-        {
-            rowGroupCount = countReader.RowGroupCount; // metadata only -- doesn't read any column data.
-        }
-
-        var results = new List<T>();
-        for (int rg = 0; rg < rowGroupCount; rg++)
-        {
-            ct.ThrowIfCancellationRequested();
-            fs.Position = 0; // ParquetReader/DeserializeUntypedAsync re-locate the footer themselves each call.
-
-            Parquet.Serialization.DeserializationResult<Dictionary<string, object>> rgResult =
-                await ParquetSerializer.DeserializeUntypedAsync(fs, rowGroupIndex: rg, cancellationToken: ct);
-
-            foreach (Dictionary<string, object> row in rgResult.Data)
-            {
-                results.Add(convert(row));
-            }
-
-            // rgResult and its Data list fall out of scope here, eligible for garbage collection
-            // before the next row group is read, instead of every row group's dictionaries
-            // coexisting for the whole file's lifetime.
-        }
-
-        return results;
     }
 }
