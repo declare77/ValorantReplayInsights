@@ -762,10 +762,16 @@ this one specifically; otherwise the hit-based tracer above is the one to trust 
   (analysis only, against an export you already made), and the `dump-*` diagnostic commands.
 - **`VrfInsights.Gui`** — a small hand-built WinForms app (`net10.0-windows`) on top of
   `VrfInsights.Pipeline`, for people who'd rather click buttons than type CLI flags.
+- **`VrfInsights.Web`** — the hosted "upload a `.vrf` in your browser" backend: a small ASP.NET
+  Core API wrapping the exact same `VrfInsights.Pipeline` code the CLI/GUI use, so the browser
+  never has to deal with vrfkit or a folder of JSON files directly. See `server/README.md` for
+  building, deploying (Cloud Run), and wiring it behind Firebase Hosting.
 - **`VrfInsights.Tests`** — xUnit tests for the pure-logic pieces (array-flattening pivot, vision
   cone geometry, round/event attribution, team-side resolution, utility open/dormant/close state
   machine).
-- **`viewer/`** — the 2D replay viewer (plain HTML/CSS/JS, no build step); see above.
+- **`viewer/`** — the 2D replay viewer (plain HTML/CSS/JS, no build step); see above. Its load
+  panel offers either a direct `.vrf` upload (via `VrfInsights.Web`, see `server/README.md`) or
+  picking a local analysis output folder by hand.
 - **`scripts/Fetch-Assets.ps1`** — downloads the viewer's map/agent/weapon art from valorant-api.com.
 - **`scripts/Build-Gui-Exe.ps1`** — publishes `VrfInsights.Gui` as a standalone, single-file
   `.exe` (see Option A above) so it can be launched without `dotnet run` or a `.bat` file.

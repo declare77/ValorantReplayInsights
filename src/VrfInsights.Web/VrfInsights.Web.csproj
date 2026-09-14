@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>VrfInsights.Web</RootNamespace>
+    <AssemblyName>VrfInsights.Web</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Deliberately NOT net10.0-windows -- unlike VrfInsights.Gui, this has to run in a Linux
+         container (Cloud Run), so nothing here may depend on WinForms or any Windows-only API. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VrfInsights.Analysis\VrfInsights.Analysis.csproj" />
+    <ProjectReference Include="..\VrfInsights.Pipeline\VrfInsights.Pipeline.csproj" />
+  </ItemGroup>
+
+</Project>

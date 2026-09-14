@@ -19,16 +19,39 @@
 </header>
 
 <section id="loadPanel">
+  <div id="uploadVrfBlock">
+    <p>
+      Upload a <code>.vrf</code> replay file directly — the server decodes it with vrfkit and
+      runs the same analysis this project's CLI/GUI do, then loads the result straight into the
+      viewer below. No local install needed. See <code>server/README.md</code> for what this
+      requires you to have deployed first.
+    </p>
+    <input type="file" id="vrfFileInput" accept=".vrf">
+    <button id="btnUploadVrf" type="button">Upload &amp; parse</button>
+    <p id="uploadVrfStatus"></p>
+    <details id="backendUrlDetails">
+      <summary>Backend URL (only needed if you didn't wire up a Hosting rewrite)</summary>
+      <p class="hint">
+        Leave this as <code>/api/parse</code> if your Firebase Hosting config rewrites that path
+        to your Cloud Run service (the recommended setup — see <code>server/README.md</code>).
+        Otherwise paste your Cloud Run service's own URL here (e.g.
+        <code>https://your-service-xyz.a.run.app</code>) — saved in this browser only.
+      </p>
+      <input type="text" id="backendUrlInput" placeholder="/api/parse" style="width: 100%;">
+    </details>
+  </div>
+  <hr>
   <p>
-    Select <strong>every file</strong> from one analysis output folder (the folder produced by
-    <code>vrf-insights analyze</code>/<code>run</code>, or the GUI's output folder — usually the
-    folder itself, not the <code>export</code> subfolder inside it). <code>match.json</code> and
-    <code>movement.json</code> are required; the rest add detail if present —
-    <code>economy.json</code> and <code>combat_interactions.json</code> power the money/K-D-A
-    ticker panel specifically; <code>hits.json</code> powers the minimap's hit-tracer animation
-    and the ticker's weapon display; <code>armor_purchases.json</code> powers the ticker's armor
-    display; and <code>shots.json</code> is a second, less-confirmed source for the same tracer
-    animation. See the README for exactly how confident to be in each of these newer files.
+    Or, select <strong>every file</strong> from one analysis output folder you already produced
+    locally (the folder produced by <code>vrf-insights analyze</code>/<code>run</code>, or the
+    GUI's output folder — usually the folder itself, not the <code>export</code> subfolder
+    inside it). <code>match.json</code> and <code>movement.json</code> are required; the rest add
+    detail if present — <code>economy.json</code> and <code>combat_interactions.json</code> power
+    the money/K-D-A ticker panel specifically; <code>hits.json</code> powers the minimap's
+    hit-tracer animation and the ticker's weapon display; <code>armor_purchases.json</code> powers
+    the ticker's armor display; and <code>shots.json</code> is a second, less-confirmed source for
+    the same tracer animation. See the README for exactly how confident to be in each of these
+    newer files.
   </p>
   <input type="file" id="fileInput" multiple accept=".json">
   <p id="loadStatus"></p>

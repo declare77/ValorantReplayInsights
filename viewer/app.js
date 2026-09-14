@@ -819,6 +819,10 @@ function readJsonFile(file) {
 
 const fileInput = document.getElementById('fileInput');
 const loadStatus = document.getElementById('loadStatus');
+const vrfFileInput = document.getElementById('vrfFileInput');
+const btnUploadVrf = document.getElementById('btnUploadVrf');
+const uploadVrfStatus = document.getElementById('uploadVrfStatus');
+const backendUrlInput = document.getElementById('backendUrlInput');
 const loadPanel = document.getElementById('loadPanel');
 const viewerRoot = document.getElementById('viewerRoot');
 const controls = document.getElementById('controls');
@@ -862,6 +866,87 @@ const copyDebugStatus = document.getElementById('copyDebugStatus');
 // Loading
 // ---------------------------------------------------------------------------
 
+/**
+ * Populates state.* from a plain object keyed by the same names as the analysis output files
+ * (minus ".json"), and starts the viewer -- the one shared path both loading routes below funnel
+ * into, so initializeFromLoadedData() and everything downstream of it doesn't care whether the
+ * data came from picking local files or from the hosted parse-on-upload backend (see
+ * server/README.md). `bundle.match` and `bundle.movement` are required; everything else is
+ * optional and defaults the same way it always has for an older/partial local output folder.
+ */
+function loadFromDataBundle(bundle) {
+  state.match = bundle.match;
+  state.tracks = bundle.movement;
+  state.utility = bundle.utility || [];
+  state.abilityCasts = bundle.ability_casts || [];
+  state.visionCones = bundle.vision_cones || null;
+  state.events = bundle.events || [];
+  state.economy = bundle.economy || [];
+  state.combat = bundle.combat_interactions || [];
+  state.shots = bundle.shots || [];
+  state.hits = bundle.hits || [];
+  state.armorPurchases = bundle.armor_purchases || [];
+  initializeFromLoadedData();
+}
+
+// ---------------------------------------------------------------------------
+// Upload a .vrf directly to the hosted parse-on-upload backend (see server/README.md) instead of
+// running vrf-insights locally and picking the resulting JSON files by hand. This page still never
+// decodes a .vrf itself -- it just POSTs the raw file to a server that shells out to vrfkit, same
+// as this project's own CLI/GUI already do locally.
+// ---------------------------------------------------------------------------
+
+const BACKEND_URL_STORAGE_KEY = 'vrfInsights.backendUrl';
+
+(function initBackendUrlField() {
+  try {
+    const saved = localStorage.getItem(BACKEND_URL_STORAGE_KEY);
+    if (saved) backendUrlInput.value = saved;
+  } catch (err) {
+    // Private browsing / storage blocked -- the field just starts empty (falls back to the
+    // "/api/parse" placeholder), same as everywhere else this file touches localStorage.
+  }
+})();
+
+function backendParseUrl() {
+  const typed = (backendUrlInput.value || '').trim();
+  const url = typed || '/api/parse';
+  try { localStorage.setItem(BACKEND_URL_STORAGE_KEY, typed); } catch (err) { /* best-effort */ }
+  return url;
+}
+
+btnUploadVrf.addEventListener('click', async () => {
+  const file = (vrfFileInput.files || [])[0];
+  if (!file) {
+    uploadVrfStatus.textContent = 'Choose a .vrf file first.';
+    return;
+  }
+
+  btnUploadVrf.disabled = true;
+  uploadVrfStatus.textContent = 'Uploading and parsing — this usually takes a few seconds, longer for a full match...';
+
+  try {
+    const form = new FormData();
+    form.append('vrf', file, file.name);
+
+    const resp = await fetch(backendParseUrl(), { method: 'POST', body: form });
+    if (!resp.ok) {
+      let detail = '';
+      try { detail = (await resp.json()).error || ''; } catch (err) { /* body wasn't JSON */ }
+      throw new Error(`Server returned ${resp.status}${detail ? ': ' + detail : ''}`);
+    }
+
+    const bundle = await resp.json();
+    uploadVrfStatus.textContent = '';
+    loadFromDataBundle(bundle);
+  } catch (err) {
+    uploadVrfStatus.textContent = "Couldn't parse that file: " + err.message +
+      ' — see the Backend URL note below if the server address might be wrong.';
+  } finally {
+    btnUploadVrf.disabled = false;
+  }
+});
+
 fileInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   if (files.length === 0) return;
@@ -882,35 +967,38 @@ fileInput.addEventListener('change', async (e) => {
     return byName.has(name) ? await readJsonFile(byName.get(name)) : fallback;
   }
 
+  let bundle;
   try {
-    state.match = await readJsonFile(byName.get('match.json'));
-    state.tracks = await readJsonFile(byName.get('movement.json'));
-    state.utility = await readOptional('utility.json', []);
-    state.abilityCasts = await readOptional('ability_casts.json', []);
-    state.visionCones = await readOptional('vision_cones.json', null);
-    // Optional (older output folders may predate this file) -- only used to find each player's
-    // death time/location per round so drawPlayers() can show a death marker instead of a live icon.
-    state.events = await readOptional('events.json', []);
-    // Optional -- power the ticker panel's money and K/D/A. Older output folders that predate the
-    // ticker simply show those columns as unavailable (see renderTicker()).
-    state.economy = await readOptional('economy.json', []);
-    state.combat = await readOptional('combat_interactions.json', []);
-    // Optional (a new, NOT-yet-confirmed-against-a-real-export output -- see ShotFiredEvent's C#
-    // doc comment) -- powers the minimap's shot-tracer animation. Missing/empty just means no
-    // tracers are drawn, same graceful-degradation as every other optional file here.
-    state.shots = await readOptional('shots.json', []);
-    // Optional -- a second, better-evidenced source for the same tracer animation (see
-    // DamageHitEvent's C# doc comment), and the ticker's weapon display.
-    state.hits = await readOptional('hits.json', []);
-    // Optional -- the ticker's armor display (see ArmorPurchaseBuilder's C# doc comment).
-    state.armorPurchases = await readOptional('armor_purchases.json', []);
+    bundle = {
+      match: await readJsonFile(byName.get('match.json')),
+      movement: await readJsonFile(byName.get('movement.json')),
+      utility: await readOptional('utility.json', []),
+      ability_casts: await readOptional('ability_casts.json', []),
+      vision_cones: await readOptional('vision_cones.json', null),
+      // Optional (older output folders may predate this file) -- only used to find each player's
+      // death time/location per round so drawPlayers() can show a death marker instead of a live icon.
+      events: await readOptional('events.json', []),
+      // Optional -- power the ticker panel's money and K/D/A. Older output folders that predate the
+      // ticker simply show those columns as unavailable (see renderTicker()).
+      economy: await readOptional('economy.json', []),
+      combat_interactions: await readOptional('combat_interactions.json', []),
+      // Optional (a new, NOT-yet-confirmed-against-a-real-export output -- see ShotFiredEvent's C#
+      // doc comment) -- powers the minimap's shot-tracer animation. Missing/empty just means no
+      // tracers are drawn, same graceful-degradation as every other optional file here.
+      shots: await readOptional('shots.json', []),
+      // Optional -- a second, better-evidenced source for the same tracer animation (see
+      // DamageHitEvent's C# doc comment), and the ticker's weapon display.
+      hits: await readOptional('hits.json', []),
+      // Optional -- the ticker's armor display (see ArmorPurchaseBuilder's C# doc comment).
+      armor_purchases: await readOptional('armor_purchases.json', []),
+    };
   } catch (err) {
     loadStatus.textContent = "Couldn't read one of those files as JSON: " + err.message;
     return;
   }
 
   loadStatus.textContent = '';
-  initializeFromLoadedData();
+  loadFromDataBundle(bundle);
 });
 
 btnLoadDifferent.addEventListener('click', () => {
