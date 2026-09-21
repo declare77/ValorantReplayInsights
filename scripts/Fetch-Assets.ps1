@@ -87,9 +87,23 @@ New-Item -ItemType Directory -Force -Path $weaponsDir | Out-Null
 $failures = New-Object System.Collections.Generic.List[string]
 
 function Get-RemoteJson {
-    param([string]$Url)
-    Write-Host "Fetching $Url ..."
-    return (Invoke-RestMethod -Uri $Url -UseBasicParsing).data
+    # CI runners occasionally hit a transient blip (timeout / rate limit / DNS hiccup) talking to
+    # valorant-api.com, and unlike Save-Image below (which already tolerates a failed image and
+    # just logs it), a failure here happens before there's anything to iterate over at all --
+    # so previously it took the whole script down immediately with no retry. Small exponential
+    # backoff here keeps a one-off blip from failing the entire GitHub Actions build.
+    param([string]$Url, [int]$MaxAttempts = 4)
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Write-Host "Fetching $Url ... (attempt $attempt/$MaxAttempts)"
+            return (Invoke-RestMethod -Uri $Url -UseBasicParsing).data
+        } catch {
+            if ($attempt -eq $MaxAttempts) { throw }
+            $delaySeconds = [Math]::Pow(2, $attempt)
+            Write-Warning "  fetch failed ($($_.Exception.Message)) -- retrying in ${delaySeconds}s..."
+            Start-Sleep -Seconds $delaySeconds
+        }
+    }
 }
 
 function Save-Image {

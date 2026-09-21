@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
   push:
     branches: [ android-app, main ]
-    paths: [ 'android/**', 'viewer/**', 'src/**', 'assets/**', '.github/workflows/build-android.yml' ]
+    paths: [ 'android/**', 'viewer/**', 'src/**', 'assets/**', 'scripts/**', '.github/workflows/build-android.yml' ]
 
 jobs:
   build:
