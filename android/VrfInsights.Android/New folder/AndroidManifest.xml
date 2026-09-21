@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="1" android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+  <!-- Deliberately no <uses-permission> at all: no INTERNET, no storage permission. The .vrf
+       is picked via Storage Access Framework (no permission needed for that on API 26+), copied
+       into this app's own private cache, decoded by the bundled vrfkit binary, and analyzed by
+       VrfInsights.Analysis -- all of it on-device, offline, in this app's own sandbox. -->
+  <!-- No custom android:icon: this keeps the project buildable without a mipmap resource set I
+       can't verify renders correctly without a real build. Add one later via
+       Resources/mipmap-*/icon.png + android:icon="@mipmap/icon" once you've done a first
+       successful build. -->
+  <application android:label="VRF Insights" android:allowBackup="false">
+  </application>
+</manifest>

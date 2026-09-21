@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Deliberately plain framework widgets (no AndroidX/Material button), so this project has
+     zero extra NuGet package dependencies beyond the .NET Android workload itself -- one less
+     thing that can fail to resolve on a first build. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+  <LinearLayout
+      android:orientation="horizontal"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:background="#1a1a1a"
+      android:padding="10dp"
+      android:gravity="center_vertical">
+
+    <Button
+        android:id="@+id/btnLoadReplay"
+        android:text="Load Replay (.vrf)"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+
+    <TextView
+        android:id="@+id/statusText"
+        android:text=""
+        android:textColor="#e0e0e0"
+        android:layout_marginStart="12dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+  </LinearLayout>
+
+  <ProgressBar
+      android:id="@+id/progressBar"
+      style="?android:attr/progressBarStyleHorizontal"
+      android:indeterminate="true"
+      android:visibility="gone"
+      android:layout_width="match_parent"
+      android:layout_height="4dp" />
+
+  <WebView
+      android:id="@+id/webView"
+      android:layout_width="match_parent"
+      android:layout_height="0dp"
+      android:layout_weight="1" />
+
+</LinearLayout>
