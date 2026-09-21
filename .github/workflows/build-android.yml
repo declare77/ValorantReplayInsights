@@ -88,15 +88,15 @@ jobs:
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  - name: Surface build failure as an annotation (visible without GitHub sign-in)
-    if: steps.build_apk.outcome == 'failure'
-    working-directory: android/VrfInsights.Android
-    run: |
-      msg=$(tail -c 4000 build.log | tail -n 60)
-      msg="${msg//'%'/'%25'}"
-      msg="${msg//$'\r'/'%0D'}"
-      msg="${msg//$'\n'/'%0A'}"
-      echo "::error::dotnet build failed. Last 60 lines of build.log:%0A$msg"
+      - name: Surface build failure as an annotation (visible without GitHub sign-in)
+        if: steps.build_apk.outcome == 'failure'
+        working-directory: android/VrfInsights.Android
+        run: |
+          msg=$(tail -c 4000 build.log | tail -n 60)
+          msg="${msg//'%'/'%25'}"
+          msg="${msg//$'\r'/'%0D'}"
+          msg="${msg//$'\n'/'%0A'}"
+          echo "::error::dotnet build failed. Last 60 lines of build.log:%0A$msg"
       - name: Fail the job if the build actually failed
         if: steps.build_apk.outcome == 'failure'
         run: exit 1
