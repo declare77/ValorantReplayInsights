@@ -44,7 +44,7 @@ jobs:
       - name: Place vrfkit binary in the app
         run: |
           mkdir -p android/VrfInsights.Android/lib/arm64-v8a
-          cp ../vrfkit/target/ndk-out/arm64-v8a/vrfkit android/VrfInsights.Android/lib/arm64-v8a/libvrfkit.so
+          cp ../vrfkit/target/aarch64-linux-android/release/vrfkit android/VrfInsights.Android/lib/arm64-v8a/libvrfkit.so
 
       - name: Fetch map/agent/weapon art from valorant-api.com
         shell: pwsh
