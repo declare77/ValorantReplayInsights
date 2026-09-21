@@ -1,0 +1,76 @@
+name: Build Android APK
+
+# Builds the app entirely on GitHub's own servers -- no local Android SDK, NDK, Rust toolchain,
+# or terminal use required on your end. Push this file (plus the rest of android/) to your repo,
+# then either wait for it to run on push, or trigger it by hand from the Actions tab
+# ("Build Android APK" -> "Run workflow"). When it finishes, download the .apk from the run's
+# "Artifacts" section at the bottom of the run page.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ android-app, main ]
+    paths: [ 'android/**', 'viewer/**', 'src/**', 'assets/**' ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone vrfkit (the .vrf decoder this app bundles)
+        run: git clone --depth 1 https://github.com/yakisoba0728/vrfkit.git ../vrfkit
+
+      - name: Install Rust (with the Android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Install Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Cross-compile vrfkit for arm64 Android
+        working-directory: ../vrfkit
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: cargo ndk -t arm64-v8a -o target/ndk-out build --release -p vrfkit --features export --locked
+
+      - name: Place vrfkit binary in the app
+        run: |
+          mkdir -p android/VrfInsights.Android/lib/arm64-v8a
+          cp ../vrfkit/target/ndk-out/arm64-v8a/vrfkit android/VrfInsights.Android/lib/arm64-v8a/libvrfkit.so
+
+      - name: Fetch map/agent/weapon art from valorant-api.com
+        shell: pwsh
+        run: ./scripts/Fetch-Assets.ps1
+
+      - name: Copy the viewer + art into the app's Assets
+        run: |
+          mkdir -p android/VrfInsights.Android/Assets/viewer android/VrfInsights.Android/Assets/assets
+          cp -r viewer/. android/VrfInsights.Android/Assets/viewer/
+          cp -r assets/. android/VrfInsights.Android/Assets/assets/
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install the Android workload
+        run: dotnet workload install android
+
+      - name: Build the APK
+        working-directory: android/VrfInsights.Android
+        run: dotnet build -c Release -f net10.0-android
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrf-insights-android-apk
+          path: android/VrfInsights.Android/bin/Release/net10.0-android/**/*.apk
+          if-no-files-found: error
