@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
   push:
     branches: [ android-app, main ]
-    paths: [ 'android/**', 'viewer/**', 'src/**', 'assets/**' ]
+    paths: [ 'android/**', 'viewer/**', 'src/**', 'assets/**', '.github/workflows/build-android.yml' ]
 
 jobs:
   build:
@@ -66,7 +66,31 @@ jobs:
 
       - name: Build the APK
         working-directory: android/VrfInsights.Android
-        run: dotnet build -c Release -f net10.0-android
+        # Piped through tee so the full output is both streamed live (for anyone signed in
+        # watching the log) and saved to a file the next step can surface even to a viewer who
+        # isn't signed in to GitHub, via the run's Summary page. PIPESTATUS[0] preserves dotnet
+        # build's real exit code -- without it, the step would "succeed" because tee itself
+        # exits 0 even when the command it's piping from failed.
+        run: |
+          set -o pipefail
+          dotnet build -c Release -f net10.0-android /v:normal 2>&1 | tee build.log
+        continue-on-error: true
+        id: build_apk
+
+      - name: Show build output in the run Summary (in case of failure)
+        if: always()
+        working-directory: android/VrfInsights.Android
+        run: |
+          if [ "${{ steps.build_apk.outcome }}" = "failure" ]; then
+            echo "## dotnet build failed -- last 400 lines of output" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -c 60000 build.log | tail -n 400 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fail the job if the build actually failed
+        if: steps.build_apk.outcome == 'failure'
+        run: exit 1
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
@@ -74,3 +98,11 @@ jobs:
           name: vrf-insights-android-apk
           path: android/VrfInsights.Android/bin/Release/net10.0-android/**/*.apk
           if-no-files-found: error
+
+      - name: Upload the full build log (always, for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: android/VrfInsights.Android/build.log
+          if-no-files-found: ignore

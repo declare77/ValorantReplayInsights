@@ -25,12 +25,16 @@
          bundled vrfkit binary + the existing analysis pipeline. The only network use tied to
          this app happens once, on YOUR machine, before building -- see android/README.md
          ("Fetching map/agent art"). -->
+  </PropertyGroup>
+
+  <ItemGroup>
     <!-- The manifest physically lives under "New folder" instead of the usual "Properties"
          because of a folder-creation limitation hit while assembling this project by hand on
-         this machine -- functionally identical either way, since .NET for Android reads this
-         property rather than assuming the "Properties" name. -->
-    <AndroidManifest>New folder\AndroidManifest.xml</AndroidManifest>
-  </PropertyGroup>
+         this machine. .NET for Android's manifest-discovery convention is an ITEM (not a
+         property): pointing an explicit <AndroidManifest Include="..."> item at the real path
+         overrides the default Properties\AndroidManifest.xml lookup. -->
+    <AndroidManifest Include="New folder\AndroidManifest.xml" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VrfInsights.Data\VrfInsights.Data.csproj" />
