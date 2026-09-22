@@ -42,6 +42,8 @@ public sealed class MainActivity : Activity
         _progressBar = FindViewById<ProgressBar>(Resource.Id.progressBar)!;
         _btnLoadReplay = FindViewById<Button>(Resource.Id.btnLoadReplay)!;
 
+        ApplySystemBarInsets();
+
         WebSettings settings = _webView.Settings!;
         settings.JavaScriptEnabled = true;
         settings.DomStorageEnabled = true; // the viewer uses localStorage for saved preferences
@@ -57,6 +59,59 @@ public sealed class MainActivity : Activity
             intent.SetType("*/*"); // .vrf has no registered MIME type on Android
             StartActivityForResult(intent, PickVrfRequestCode);
         };
+    }
+
+    /// <summary>
+    /// Android 15 (API 35) and newer draw every app edge-to-edge by default, which tucks the top
+    /// of this layout underneath the status bar so the "Load Replay" button collides with the
+    /// clock. Pad the content view by the system bar insets instead. Framework-only (no AndroidX
+    /// dependency, matching this project's zero-extra-NuGet stance), with the pre-API-30 fallback
+    /// for older devices, and bottom/side padding so the gesture bar and cutouts are handled too.
+    /// </summary>
+    private void ApplySystemBarInsets()
+    {
+        global::Android.Views.View? content =
+            FindViewById<global::Android.Views.View>(global::Android.Resource.Id.Content);
+
+        if (content is null)
+        {
+            return;
+        }
+
+        content.SetOnApplyWindowInsetsListener(new SystemBarInsetsListener());
+        content.RequestApplyInsets();
+    }
+
+    private sealed class SystemBarInsetsListener
+        : Java.Lang.Object, global::Android.Views.View.IOnApplyWindowInsetsListener
+    {
+        public global::Android.Views.WindowInsets OnApplyWindowInsets(
+            global::Android.Views.View v,
+            global::Android.Views.WindowInsets insets)
+        {
+            int left, top, right, bottom;
+
+            if (global::Android.OS.Build.VERSION.SdkInt >= global::Android.OS.BuildVersionCodes.R)
+            {
+                global::Android.Graphics.Insets bars =
+                    insets.GetInsets(global::Android.Views.WindowInsets.Type.SystemBars())!;
+
+                left = bars.Left;
+                top = bars.Top;
+                right = bars.Right;
+                bottom = bars.Bottom;
+            }
+            else
+            {
+                left = insets.SystemWindowInsetLeft;
+                top = insets.SystemWindowInsetTop;
+                right = insets.SystemWindowInsetRight;
+                bottom = insets.SystemWindowInsetBottom;
+            }
+
+            v.SetPadding(left, top, right, bottom);
+            return insets;
+        }
     }
 
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
