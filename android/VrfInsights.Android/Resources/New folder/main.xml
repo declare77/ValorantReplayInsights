@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Deliberately plain framework widgets (no AndroidX/Material button), so this project has
-     zero extra NuGet package dependencies beyond the .NET Android workload itself -- one less
+     zero extra NuGet package dependencies beyond the .NET Android workload itself - one less
      thing that can fail to resolve on a first build. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:orientation="vertical"
