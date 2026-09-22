@@ -67,11 +67,11 @@ public sealed class MainActivity : Activity
             return;
         }
 
-        Android.Net.Uri uri = data.Data;
+        global::Android.Net.Uri uri = data.Data;
         _ = ParseAndLoadAsync(uri);
     }
 
-    private async Task ParseAndLoadAsync(Android.Net.Uri uri)
+    private async Task ParseAndLoadAsync(global::Android.Net.Uri uri)
     {
         SetBusy(true, "Copying file...");
 
@@ -190,7 +190,7 @@ public sealed class MainActivity : Activity
     {
         RunOnUiThread(() =>
         {
-            _progressBar.Visibility = busy ? Android.Views.ViewStates.Visible : Android.Views.ViewStates.Gone;
+            _progressBar.Visibility = busy ? global::Android.Views.ViewStates.Visible : global::Android.Views.ViewStates.Gone;
             _btnLoadReplay.Enabled = !busy;
             _statusText.Text = status;
         });

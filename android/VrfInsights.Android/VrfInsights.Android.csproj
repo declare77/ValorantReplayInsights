@@ -17,7 +17,6 @@
          x86_64 here (and build a matching libvrfkit.so under lib\x86_64\) only if you need to
          run this in an emulator rather than on a real device. -->
     <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
-    <AndroidSupportedAbis>arm64-v8a</AndroidSupportedAbis>
     <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
     <AndroidUseAapt2>true</AndroidUseAapt2>
     <!-- No network permission is declared anywhere in AndroidManifest.xml, and this project
